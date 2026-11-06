@@ -34,9 +34,7 @@ class SignalResult(BaseModel):
     evidence: dict[str, Any] = Field(
         default_factory=dict, description="Structured metrics and data points"
     )
-    recommendations: list[str] = Field(
-        default_factory=list, description="Actionable suggestions"
-    )
+    recommendations: list[str] = Field(default_factory=list, description="Actionable suggestions")
 
 
 class FileHotspotEvidence(BaseModel):
@@ -70,3 +68,26 @@ class ContributorStats(BaseModel):
     recent_commit_count: int
     last_commit_date: str
     recency_score: float
+
+
+class RecommendedActions(BaseModel):
+    tests_to_run: list[str] = Field(default_factory=list)
+    suggested_reviewers: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+
+class AnalysisResult(BaseModel):
+    """Overall PR analysis and risk assessment."""
+
+    overall_score: float = Field(ge=0.0, le=100.0)
+    risk_category: RiskCategory
+    data_quality: DataQuality
+    base_ref: str
+    head_ref: str
+    total_files_changed: int
+    additions: int
+    deletions: int
+    signals: dict[str, SignalResult] = Field(default_factory=dict)
+    weights: dict[str, float] = Field(default_factory=dict)
+    why_flagged: list[str] = Field(default_factory=list)
+    recommended_actions: RecommendedActions = Field(default_factory=RecommendedActions)

@@ -1,8 +1,10 @@
 """
 cli.py — Typer CLI entry point for Regression Radar.
 
-Currently wires up the Phase 1 git-history and diff-parser pipeline.
-Full scoring, reporting and GitHub integration are added in later phases.
+Provides:
+- rr version: Print version.
+- rr inspect: Diagnostic repo statistics and diff breakdown.
+- rr analyse: Full multi-engine risk analysis with terminal, Markdown, and JSON reports.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from rich.console import Console
 from rich.table import Table
 
 from regression_radar import __version__
+from regression_radar.cochange import calculate_cochange_signal
 from regression_radar.diff_parser import parse_diff
 from regression_radar.git_history import (
     DataQuality,
@@ -23,9 +26,23 @@ from regression_radar.git_history import (
     get_diff,
     get_repo_stats,
 )
+from regression_radar.hotspot import calculate_hotspot_signal
+from regression_radar.llm_explain import generate_ai_explanation
+from regression_radar.ownership import calculate_ownership_signal
+from regression_radar.recommendations import build_recommendations
+from regression_radar.report import (
+    format_json_report,
+    format_markdown_report,
+    render_terminal_report,
+)
+from regression_radar.scoring import (
+    build_analysis_result,
+    compute_risk_score,
+    load_scoring_config,
+)
+from regression_radar.test_gap import calculate_test_gap_signal
 
-# Ensure standard output can handle UTF-8 symbols on Windows terminals if supported,
-# but use safe ASCII characters in Rich output for broad cross-platform safety.
+# Ensure standard output handles UTF-8 on Windows
 if sys.platform == "win32":
     try:
         if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -37,7 +54,7 @@ if sys.platform == "win32":
 
 app = typer.Typer(
     name="rr",
-    help="Regression Radar — history-aware PR risk analyser.",
+    help="Regression Radar — AI-powered Pull Request risk analyser.",
     add_completion=False,
 )
 
@@ -54,20 +71,10 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# version command
-# ---------------------------------------------------------------------------
-
-
 @app.command("version")
 def version_cmd() -> None:
     """Print the installed version."""
     console.print(f"[bold]Regression Radar[/bold] v{__version__}")
-
-
-# ---------------------------------------------------------------------------
-# inspect command (Phase 1 — repo stats + diff summary)
-# ---------------------------------------------------------------------------
 
 
 @app.command("inspect")
@@ -92,12 +99,7 @@ def inspect_cmd(
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """
-    Inspect a repository: show stats, changed files, and commit summary.
-
-    This is the Phase 1 diagnostic command. Full analysis (scores, signals,
-    recommendations) will be available via the 'analyse' command in Phase 3.
-    """
+    """Inspect a repository: show stats, changed files, and commit summary."""
     _setup_logging(verbose)
 
     try:
@@ -106,7 +108,6 @@ def inspect_cmd(
         err_console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1)
 
-    # --- Repository overview ---
     console.rule("[bold blue]Regression Radar — Repository Inspection[/bold blue]")
     console.print(f"[bold]Repository:[/bold]  {stats.path}")
     console.print(f"[bold]Total commits:[/bold] {stats.total_commits}")
@@ -125,7 +126,6 @@ def inspect_cmd(
             "\n   Analysis signals will be weak or unavailable."
         )
 
-    # --- Diff ---
     effective_base = base or (stats.default_branch or "HEAD~1")
     console.print(f"\n[bold]Diff base:[/bold] {effective_base} -> HEAD\n")
 
@@ -164,7 +164,6 @@ def inspect_cmd(
             f"[red]-{parsed.total_deletions}[/red] lines"
         )
 
-    # --- Commit summary ---
     console.print()
     commits = get_commits(
         repo,
@@ -182,15 +181,6 @@ def inspect_cmd(
             tag = " [yellow][bugfix][/yellow]" if c.is_bugfix_candidate else ""
             console.print(f"  [dim]{c.short_sha}[/dim] {c.timestamp.date()}  {c.subject[:72]}{tag}")
 
-    console.print(
-        "\n[dim]Phase 1 complete. Run 'rr analyse' (Phase 3) for full risk scoring.[/dim]"
-    )
-
-
-# ---------------------------------------------------------------------------
-# analyse command (Phase 3 placeholder — wired to inspect for now)
-# ---------------------------------------------------------------------------
-
 
 @app.command("analyse")
 def analyse_cmd(
@@ -201,32 +191,136 @@ def analyse_cmd(
         file_okay=False,
         resolve_path=True,
     ),
-    base: str | None = typer.Option(None, "--base", "-b", help="Base branch or ref."),
-    max_commits: int = typer.Option(500, "--max-commits"),
+    base: str | None = typer.Option(None, "--base", "-b", help="Base branch or ref (e.g. main)."),
+    head: str | None = typer.Option(
+        None, "--head", "-h", help="Head commit or ref (defaults to HEAD)."
+    ),
+    format: str = typer.Option(
+        "terminal",
+        "--format",
+        "-f",
+        help="Output format: terminal, markdown, json.",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write report output to a file instead of stdout.",
+    ),
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Custom path to weights configuration TOML file.",
+    ),
+    author: str | None = typer.Option(
+        None,
+        "--author",
+        help="Email of the PR author (used to calculate ownership familiarity).",
+    ),
+    max_commits: int = typer.Option(2000, "--max-commits"),
+    ai: bool = typer.Option(
+        True,
+        "--ai/--no-ai",
+        help="Enable AI summary enrichment if GEMINI_API_KEY is configured.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """
-    Analyse a repository and produce a risk-prioritisation report.
+    """Analyse a pull request or ref comparison and produce an explainable risk report."""
+    _setup_logging(verbose)
 
-    [Phase 3 — full scoring and signals not yet implemented.
-     Runs 'inspect' as a preview.]
-    """
-    console.print(
-        "[yellow]ℹ[/yellow]  Full analysis (Phase 3) not yet implemented. "
-        "Running 'inspect' instead.\n"
+    try:
+        stats = get_repo_stats(repo)
+    except ValueError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+
+    effective_base = base or (stats.default_branch or "HEAD~1")
+    effective_head = head or "HEAD"
+
+    # 1. Extract diff
+    try:
+        raw_diff = get_diff(repo, base_ref=effective_base, head_ref=effective_head)
+    except RuntimeError as exc:
+        err_console.print(f"[red]Diff error:[/red] {exc}")
+        raise typer.Exit(1)
+
+    parsed_diff = parse_diff(raw_diff.text)
+    changed_files = parsed_diff.changed_paths
+
+    # 2. Extract commit history (prior to PR or on base branch)
+    history_commits = get_commits(repo, max_commits=max_commits, exclude_merges=True)
+
+    # 3. Execute all 4 analysis signals
+    hotspot_signal = calculate_hotspot_signal(
+        changed_files, history_commits, data_quality=stats.data_quality
     )
-    # Delegate to inspect for now
-    inspect_cmd(
-        repo=repo,
-        base=base,
-        max_commits=max_commits,
-        verbose=verbose,
+    cochange_signal = calculate_cochange_signal(
+        changed_files, history_commits, data_quality=stats.data_quality
+    )
+    test_gap_signal = calculate_test_gap_signal(
+        changed_files, history_commits, data_quality=stats.data_quality
+    )
+    ownership_signal = calculate_ownership_signal(
+        changed_files,
+        history_commits,
+        pr_author_email=author,
+        data_quality=stats.data_quality,
     )
 
+    signals = {
+        "historical_hotspot": hotspot_signal,
+        "cochange_anomaly": cochange_signal,
+        "test_gap": test_gap_signal,
+        "ownership": ownership_signal,
+    }
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+    # 4. Load config and compute deterministic score
+    cfg = load_scoring_config(config)
+    score, category, effective_weights = compute_risk_score(
+        signals, weights=cfg["weights"], thresholds=cfg["thresholds"]
+    )
+
+    # 5. Build recommendations
+    actions = build_recommendations(signals, score, category)
+
+    # 6. Build initial analysis result
+    result = build_analysis_result(
+        signals=signals,
+        base_ref=effective_base,
+        head_ref=effective_head,
+        total_files_changed=len(parsed_diff.files),
+        additions=parsed_diff.total_additions,
+        deletions=parsed_diff.total_deletions,
+        data_quality=stats.data_quality,
+        custom_weights=effective_weights,
+        custom_thresholds=cfg["thresholds"],
+        recommended_actions=actions,
+    )
+
+    # Optional AI enrichment
+    if ai:
+        enhanced_actions = generate_ai_explanation(result)
+        result.recommended_actions = enhanced_actions
+
+    # 7. Render output
+    fmt = format.lower().strip()
+    if fmt == "json":
+        out_text = format_json_report(result)
+        if output:
+            output.write_text(out_text, encoding="utf-8")
+            console.print(f"[green]Report saved to {output}[/green]")
+        else:
+            print(out_text)
+    elif fmt == "markdown" or output:
+        out_text = format_markdown_report(result)
+        if output:
+            output.write_text(out_text, encoding="utf-8")
+            console.print(f"[green]Markdown report written to {output}[/green]")
+        else:
+            print(out_text)
+    else:
+        render_terminal_report(result, console)
 
 
 def _quality_badge(quality: DataQuality) -> None:

@@ -43,58 +43,58 @@ Acceptance criteria:
 - [x] `test_gap.py` maps source → test files via naming + co-change fallback
 - [x] `ownership.py` returns recent contributor list per file with recency weighting and suggests candidate reviewers
 - [x] Every signal returns structured `SignalResult` (score, evidence, explanation, data_quality, recommendations)
-- [x] Comprehensive test coverage with 23 new unit tests (82 tests total across suite)
+- [x] Comprehensive test coverage with 23 unit tests
 - [x] Ruff lint checks pass cleanly with 0 errors
 
 ---
 
-## Phase 3 — Scoring engine + CLI reports [ ]
+## Phase 3 — Scoring engine + CLI reports ✅
 
 **Goal:** Wire signals into a readable, deterministic risk report.
 
 Acceptance criteria:
-- [ ] `scoring.py` combines signals with configurable weights → 0–100 score + category
-- [ ] Weights loaded from `configs/weights.toml` (overridable via CLI)
-- [ ] `report.py` renders terminal (Rich table + panel), Markdown, and JSON
-- [ ] CLI command `rr analyse` accepts repo path, base branch, format, output file
-- [ ] JSON schema documented and stable
-- [ ] Scoring unit tests cover boundary conditions (all zeros, all max, missing signals)
+- [x] `scoring.py` combines signals with configurable weights → 0–100 score + category
+- [x] Weights loaded from `configs/weights.toml` (overridable via CLI)
+- [x] `report.py` renders terminal (Rich table + panel), Markdown, and JSON
+- [x] CLI command `rr analyse` accepts repo path, base branch, format, output file
+- [x] JSON schema documented and stable
+- [x] Scoring unit tests cover boundary conditions (all zeros, all max, missing signals)
 
 ---
 
-## Phase 4 — GitHub Actions integration [ ]
+## Phase 4 — GitHub Actions integration ✅
 
 **Goal:** Analyse PRs automatically and post a structured comment.
 
 Acceptance criteria:
-- [ ] `.github/workflows/regression-radar.yml` runs on `pull_request`
-- [ ] Action checks out PR head + base, runs `rr analyse`
-- [ ] Posts/updates a PR comment with Markdown report (no duplicate comments on rerun)
-- [ ] Uses `contents: read` + `pull-requests: write` only
-- [ ] Never auto-merges, approves, or blocks PRs
+- [x] `.github/workflows/regression-radar.yml` runs on `pull_request`
+- [x] Action checks out PR head + base, runs `rr analyse`
+- [x] Posts/updates a PR comment with Markdown report (no duplicate comments on rerun via marker tag)
+- [x] Uses `contents: read` + `pull-requests: write` only
+- [x] Never auto-merges, approves, or blocks PRs
 
 ---
 
-## Phase 5 — Optional LLM explanations [ ]
+## Phase 5 — Optional AI ✅
 
 **Goal:** Optionally enrich reports with natural-language summaries.
 
 Acceptance criteria:
-- [ ] `llm_explain.py` accepts structured `AnalysisResult`, returns prose explanation
-- [ ] LLM cannot modify risk score or invent evidence
-- [ ] Fully functional fallback when `GEMINI_API_KEY` not set
-- [ ] No repository source code sent to API
-- [ ] Gemini API used (google-generativeai SDK)
+- [x] `llm_explain.py` accepts structured `AnalysisResult`, returns prose explanation
+- [x] LLM cannot modify risk score or invent evidence
+- [x] Fully functional fallback when `GEMINI_API_KEY` not set
+- [x] No repository source code sent to API
+- [x] Gemini API integrated
 
 ---
 
-## Phase 6 — Hackathon validation [ ]
+## Phase 6 — Hackathon validation ✅
 
 **Goal:** Demonstrate measurable correctness on a controlled scenario.
 
 Acceptance criteria:
-- [ ] `examples/demo-repo/` is a reproducible Git repo with known bug-fix history
-- [ ] Evaluation script runs historical replay (no future-data leakage)
-- [ ] `docs/EVALUATION.md` reports detection rate, precision, false-positive rate
-- [ ] Comparison against trivial baseline (random score) documented
-- [ ] Honest limitations section included
+- [x] `examples/demo-repo/` is a reproducible Git repo with known bug-fix history (`payments.ts`, `refunds.ts`, `payments.test.ts`)
+- [x] Evaluation script runs historical replay (no future-data leakage)
+- [x] `docs/EVALUATION.md` reports detection rate, precision, false-positive rate
+- [x] Comparison against trivial baseline (churn and random) documented
+- [x] Honest limitations section included

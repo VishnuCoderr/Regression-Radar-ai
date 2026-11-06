@@ -1,0 +1,12 @@
+services:
+  regression-radar:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_LEVEL=INFO
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      # Optional: mount local repository storage
+      - .:/app/mounted-repo:ro
+    restart: unless-stopped

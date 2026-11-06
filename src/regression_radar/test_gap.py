@@ -17,9 +17,25 @@ from regression_radar.models import SignalResult, TestGapEvidence
 logger = logging.getLogger(__name__)
 
 NON_SOURCE_EXTS = {
-    ".md", ".rst", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini",
-    ".cfg", ".png", ".jpg", ".jpeg", ".svg", ".gif", ".ico", ".lock",
-    ".gitignore", ".gitattributes", ".editorconfig",
+    ".md",
+    ".rst",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".svg",
+    ".gif",
+    ".ico",
+    ".lock",
+    ".gitignore",
+    ".gitattributes",
+    ".editorconfig",
 }
 
 
@@ -35,10 +51,7 @@ def is_test_file(path_str: str) -> bool:
 
     has_test_prefix = stem.startswith("test_") or stem.startswith("test-")
     has_test_suffix = (
-        stem.endswith("_test")
-        or stem.endswith("-test")
-        or ".test." in name
-        or ".spec." in name
+        stem.endswith("_test") or stem.endswith("-test") or ".test." in name or ".spec." in name
     )
 
     return in_test_dir or has_test_prefix or has_test_suffix
@@ -54,8 +67,24 @@ def is_source_file(path_str: str) -> bool:
     if p.name.startswith("."):
         return False
     return p.suffix.lower() in {
-        ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java",
-        ".c", ".cpp", ".cc", ".h", ".hpp", ".cs", ".rb", ".php", ".swift", ".kt",
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".go",
+        ".rs",
+        ".java",
+        ".c",
+        ".cpp",
+        ".cc",
+        ".h",
+        ".hpp",
+        ".cs",
+        ".rb",
+        ".php",
+        ".swift",
+        ".kt",
     }
 
 

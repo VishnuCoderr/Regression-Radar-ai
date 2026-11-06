@@ -92,25 +92,27 @@ def calculate_cochange_signal(
                 if fb not in changed_set:
                     missing_score = round(confidence * 100.0, 1)
                     anomaly_scores.append(missing_score)
-                    missing_partners.append({
-                        "changed_file": fa,
-                        "missing_partner": fb,
-                        "support": support,
-                        "confidence": round(confidence, 3),
-                        "example_shas": shas,
-                    })
+                    missing_partners.append(
+                        {
+                            "changed_file": fa,
+                            "missing_partner": fb,
+                            "support": support,
+                            "confidence": round(confidence, 3),
+                            "example_shas": shas,
+                        }
+                    )
                 else:
-                    satisfied_partners.append({
-                        "changed_file": fa,
-                        "cochanged_partner": fb,
-                        "support": support,
-                        "confidence": round(confidence, 3),
-                    })
+                    satisfied_partners.append(
+                        {
+                            "changed_file": fa,
+                            "cochanged_partner": fb,
+                            "support": support,
+                            "confidence": round(confidence, 3),
+                        }
+                    )
 
     # Sort missing partners by confidence descending
-    missing_partners.sort(
-        key=lambda x: (float(x["confidence"]), int(x["support"])), reverse=True
-    )
+    missing_partners.sort(key=lambda x: (float(x["confidence"]), int(x["support"])), reverse=True)
 
     # 3. Compute deterministic score
     if not missing_partners:
