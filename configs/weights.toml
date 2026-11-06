@@ -1,0 +1,43 @@
+# Regression Radar — Default scoring configuration
+# All weights must sum to 1.0
+# Thresholds define score category boundaries
+
+[weights]
+hotspot  = 0.35   # Historical bug-fix / revert frequency signal
+cochange = 0.30   # Co-change anomaly signal (absent partner files)
+testgap  = 0.25   # Test-gap signal (untested source changes)
+ownership = 0.10  # Ownership signal (unfamiliar territory)
+
+[thresholds]
+low      = 0    # 0–29
+medium   = 30   # 30–59
+high     = 60   # 60–79
+critical = 80   # 80–100
+
+[history]
+# Minimum commit count before emitting low-data quality warnings
+min_commits_for_full_confidence = 30
+
+# How many days of history to consider for recency weighting (ownership signal)
+ownership_recency_days = 180
+
+# Co-change: minimum number of commits where both files changed together
+cochange_min_support = 3
+
+# Co-change: minimum proportion of fileA commits that also include fileB
+cochange_min_confidence = 0.5
+
+[bugfix_patterns]
+# Regex patterns matched against commit subject line (case-insensitive)
+# A commit matching ANY pattern is classified as a bug-fix candidate
+patterns = [
+  "^fix",
+  "\\bfix\\b",
+  "\\bbug\\b",
+  "\\bdefect\\b",
+  "^revert",
+  "\\brevert\\b",
+  "\\bhotfix\\b",
+  "\\bpatch\\b",
+  "\\bregression\\b",
+]
