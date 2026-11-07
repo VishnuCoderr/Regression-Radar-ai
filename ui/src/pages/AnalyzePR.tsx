@@ -2,8 +2,36 @@
 import React, { useState } from "react";
 import {
   Zap, Folder, GitBranch, User, AlertTriangle, ChevronDown, ChevronUp,
-  CheckCircle2, Users, TestTube2, FileText, Sparkles,
+  CheckCircle2, Users, TestTube2, FileText, Sparkles, Info,
 } from "lucide-react";
+
+// ---------------------------------------------------------------------------
+// Path validation — runs entirely client-side, before hitting the API
+// ---------------------------------------------------------------------------
+function validateRepoPath(raw: string): string | null {
+  const v = raw.trim();
+
+  if (!v) return "Repository path is required.";
+
+  // GitHub / HTTP URLs
+  if (/^https?:\/\//i.test(v) || /^git@/i.test(v) || /^github\.com/i.test(v)) {
+    return "GitHub URL analysis is not supported here yet. Use a local clone.";
+  }
+
+  // Must look like an absolute path (Windows C:\ / D:\ or Unix /)
+  const isWindowsAbsolute = /^[A-Za-z]:[/\\]/.test(v);
+  const isUnixAbsolute = v.startsWith("/");
+  if (!isWindowsAbsolute && !isUnixAbsolute) {
+    return "Please enter an absolute path (e.g. C:\\Users\\you\\my-repo or /home/you/my-repo).";
+  }
+
+  // Reject obviously wrong suffixes
+  if (v.endsWith(".git") && !v.includes("/") && !v.includes("\\")) {
+    return "Enter the directory path to the repository, not a .git URL.";
+  }
+
+  return null; // valid
+}
 import { Card, CardBody, CardHeader } from "../components/ui/Card";
 import { RiskBadge } from "../components/ui/Badge";
 import { ScoreGauge } from "../components/ui/ScoreGauge";
@@ -40,6 +68,82 @@ function InputField({
   );
 }
 
+// Dedicated repo-path field with inline validation feedback
+function RepoPathField({
+  value,
+  onChange,
+  pathError,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  pathError: string | null;
+}) {
+  const isGitHubError =
+    pathError?.startsWith("GitHub URL") ?? false;
+
+  const borderClass = pathError
+    ? "border-red-500/60 focus:border-red-500/80 focus:ring-red-500/20"
+    : value.trim()
+    ? "border-emerald-500/40 focus:border-emerald-500/60 focus:ring-emerald-500/15"
+    : "border-[#2a2a38] focus:border-blue-500/60 focus:ring-blue-500/20";
+
+  return (
+    <div>
+      {/* Label row */}
+      <div className="flex items-center justify-between mb-1.5">
+        <label htmlFor="repo_path" className="text-xs font-medium text-zinc-400">
+          Local Git Repository Path
+        </label>
+        <span className="text-[10px] text-zinc-600 uppercase tracking-wide font-medium">
+          required
+        </span>
+      </div>
+
+      {/* Input */}
+      <div className="relative">
+        <Folder className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-600 pointer-events-none" />
+        <input
+          id="repo_path"
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="C:\Users\you\my-repo"
+          autoComplete="off"
+          spellCheck={false}
+          className={`w-full bg-[#18181f] border rounded-lg pl-8 pr-3 py-2 text-sm text-white placeholder-zinc-700 focus:outline-none focus:ring-1 transition-colors font-mono ${borderClass}`}
+        />
+      </div>
+
+      {/* Inline validation message */}
+      {pathError ? (
+        <div className={`mt-2 flex items-start gap-2 rounded-md px-3 py-2 ${
+          isGitHubError
+            ? "bg-violet-500/10 border border-violet-500/20"
+            : "bg-red-500/10 border border-red-500/20"
+        }`}>
+          <AlertTriangle className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${isGitHubError ? "text-violet-400" : "text-red-400"}`} />
+          <p className={`text-xs leading-relaxed ${isGitHubError ? "text-violet-300" : "text-red-400"}`}>
+            {pathError}
+          </p>
+        </div>
+      ) : (
+        /* Helper text — always visible when field is empty */
+        !value.trim() && (
+          <div className="mt-1.5 flex items-start gap-1.5">
+            <Info className="w-3 h-3 text-zinc-700 flex-shrink-0 mt-0.5" />
+            <p className="text-[11px] text-zinc-600 leading-relaxed">
+              Enter the absolute path to a Git repository on your machine.{" "}
+              <span className="font-mono text-zinc-700">
+                e.g. C:\Users\you\my-repo
+              </span>
+            </p>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
 export function AnalyzePR() {
   const { addRecord } = useAnalysisStore();
   const [form, setForm] = useState<AnalyzeRequest>({
@@ -52,16 +156,30 @@ export function AnalyzePR() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
+  // Live path validation — updated on every keystroke
+  const [pathError, setPathError] = useState<string | null>(null);
 
   const set = (key: keyof AnalyzeRequest) => (val: string | boolean) =>
     setForm((f) => ({ ...f, [key]: val }));
 
+  function handlePathChange(v: string) {
+    set("repo_path")(v);
+    // Validate on the raw value so the user sees feedback while typing
+    setPathError(v.trim() ? validateRepoPath(v) : null);
+    // Clear any previous server error when user edits the field
+    setError(null);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.repo_path.trim()) {
-      setError("Repository path is required.");
+
+    // Run client-side validation first
+    const clientError = validateRepoPath(form.repo_path);
+    if (clientError) {
+      setPathError(clientError);
       return;
     }
+
     setLoading(true);
     setError(null);
     setResult(null);
@@ -81,11 +199,24 @@ export function AnalyzePR() {
         result: data,
       });
     } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
-        (err as Error)?.message ??
-        "Analysis failed.";
-      setError(msg);
+      // Translate raw API / filesystem errors into plain language
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "";
+      const raw = (err as Error)?.message ?? "";
+
+      let friendly: string;
+      if (detail.toLowerCase().includes("not a git repository") || detail.toLowerCase().includes("does not exist")) {
+        friendly = "Path not found or is not a Git repository. Check the path and try again.";
+      } else if (detail.toLowerCase().includes("permission") || detail.toLowerCase().includes("access denied")) {
+        friendly = "Cannot read the repository — check folder permissions.";
+      } else if (detail) {
+        friendly = detail;
+      } else if (raw.includes("Network Error") || raw.includes("ECONNREFUSED")) {
+        friendly = "Cannot reach the analysis API. Make sure the backend is running on port 8000.";
+      } else {
+        friendly = "Analysis failed. Check the repository path and refs, then try again.";
+      }
+      setError(friendly);
     } finally {
       setLoading(false);
     }
@@ -108,12 +239,10 @@ export function AnalyzePR() {
           </CardHeader>
           <CardBody>
             <form onSubmit={handleSubmit} className="space-y-4">
-              <InputField
-                label="Repository Path"
-                id="repo_path"
+              <RepoPathField
                 value={form.repo_path}
-                onChange={set("repo_path")}
-                placeholder="/path/to/your/repo"
+                onChange={handlePathChange}
+                pathError={pathError}
               />
               <div className="grid grid-cols-2 gap-3">
                 <InputField
@@ -162,16 +291,9 @@ export function AnalyzePR() {
                 </div>
               </label>
 
-              {error && (
-                <div className="flex items-start gap-2.5 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2.5">
-                  <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-red-400 leading-relaxed">{error}</p>
-                </div>
-              )}
-
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || !!pathError}
                 className="w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white text-sm font-medium rounded-lg transition-colors"
               >
                 {loading ? (
@@ -186,6 +308,13 @@ export function AnalyzePR() {
                   </>
                 )}
               </button>
+
+              {error && (
+                <div className="flex items-start gap-2.5 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2.5">
+                  <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-400 leading-relaxed">{error}</p>
+                </div>
+              )}
             </form>
           </CardBody>
         </Card>
