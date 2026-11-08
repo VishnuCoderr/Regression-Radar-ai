@@ -42,6 +42,15 @@ export interface AnalyzeRequest {
   use_ai?: boolean;
 }
 
+export interface GitHubPRRequest {
+  pr_url: string;
+  use_ai?: boolean;
+}
+
+export interface TokenStatus {
+  has_token: boolean;
+}
+
 export interface HealthResponse {
   status: string;
   version: string;

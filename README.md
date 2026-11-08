@@ -74,6 +74,14 @@ rr analyse /path/to/repo --base main --format markdown --output comment.md
 rr analyse /path/to/repo --base main --format json
 ```
 
+### GitHub PR URL Analysis (Web & API)
+
+You can analyze public or private GitHub PRs directly by URL without manually cloning repositories:
+
+- **Web UI:** Switch to the **GitHub PR** tab in the *PR Intelligence* view, paste the PR URL (e.g. `https://github.com/owner/repo/pull/123`), and click **Analyse PR**.
+- **REST API:** `POST /api/v1/analyze/github-pr` with payload `{"pr_url": "https://github.com/owner/repo/pull/123", "use_ai": false}`.
+- **Credentials:** Set `GITHUB_TOKEN` in the backend environment. Public repositories work out-of-the-box (60 req/hr rate limit); private repositories require a token with `repo` scope. Tokens remain strictly server-side.
+
 ### Run tests
 
 ```bash

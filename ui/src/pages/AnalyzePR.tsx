@@ -1,21 +1,21 @@
-// src/pages/AnalyzePR.tsx — PR Intelligence / Analysis page (flagship)
+// src/pages/AnalyzePR.tsx â€” PR Intelligence / Analysis page (flagship)
 import React, { useState } from "react";
 import {
   Zap, Folder, GitBranch, User, AlertTriangle, ChevronDown, ChevronUp,
-  CheckCircle2, Users, TestTube2, FileText, Sparkles, Info,
+  CheckCircle2, Users, TestTube2, FileText, Sparkles, Info, GitPullRequest, Lock,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
-// Path validation — runs entirely client-side, before hitting the API
+// Path validation â€” runs entirely client-side, before hitting the API
 // ---------------------------------------------------------------------------
 function validateRepoPath(raw: string): string | null {
   const v = raw.trim();
 
   if (!v) return "Repository path is required.";
 
-  // GitHub / HTTP URLs
+  // GitPullRequest / HTTP URLs
   if (/^https?:\/\//i.test(v) || /^git@/i.test(v) || /^github\.com/i.test(v)) {
-    return "GitHub URL analysis is not supported here yet. Use a local clone.";
+    return "GitPullRequest URL analysis is not supported here yet. Use a local clone.";
   }
 
   // Must look like an absolute path (Windows C:\ / D:\ or Unix /)
@@ -32,13 +32,28 @@ function validateRepoPath(raw: string): string | null {
 
   return null; // valid
 }
+
+// ---------------------------------------------------------------------------
+// GitPullRequest PR URL validation â€” client-side, before hitting the API
+// ---------------------------------------------------------------------------
+function validateGitHubUrl(raw: string): string | null {
+  const v = raw.trim();
+  if (!v) return "GitPullRequest PR URL is required.";
+  const pattern = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/?$/i;
+  if (!pattern.test(v.split("?")[0].split("#")[0])) {
+    return "Enter a valid GitPullRequest PR URL: https://github.com/<owner>/<repo>/pull/<number>";
+  }
+  return null;
+}
 import { Card, CardBody, CardHeader } from "../components/ui/Card";
 import { RiskBadge } from "../components/ui/Badge";
 import { ScoreGauge } from "../components/ui/ScoreGauge";
 import { SignalBar } from "../components/ui/SignalBar";
-import { runAnalysis } from "../api/client";
+import { runAnalysis, runGitHubAnalysis } from "../api/client";
 import { useAnalysisStore } from "../store/analysisStore";
 import type { AnalysisResult, AnalyzeRequest } from "../types/api";
+
+type AnalysisMode = "local" | "github";
 
 const SIGNAL_LABELS: Record<string, string> = {
   historical_hotspot: "Historical Hotspot",
@@ -79,7 +94,7 @@ function RepoPathField({
   pathError: string | null;
 }) {
   const isGitHubError =
-    pathError?.startsWith("GitHub URL") ?? false;
+    pathError?.startsWith("GitPullRequest URL") ?? false;
 
   const borderClass = pathError
     ? "border-red-500/60 focus:border-red-500/80 focus:ring-red-500/20"
@@ -127,7 +142,7 @@ function RepoPathField({
           </p>
         </div>
       ) : (
-        /* Helper text — always visible when field is empty */
+        /* Helper text â€” always visible when field is empty */
         !value.trim() && (
           <div className="mt-1.5 flex items-start gap-1.5">
             <Info className="w-3 h-3 text-zinc-700 flex-shrink-0 mt-0.5" />
@@ -146,6 +161,9 @@ function RepoPathField({
 
 export function AnalyzePR() {
   const { addRecord } = useAnalysisStore();
+  const [mode, setMode] = useState<AnalysisMode>("local");
+
+  // Local repo form state
   const [form, setForm] = useState<AnalyzeRequest>({
     repo_path: "",
     base_ref: "main",
@@ -153,41 +171,69 @@ export function AnalyzePR() {
     pr_author_email: "",
     use_ai: false,
   });
+  const [pathError, setPathError] = useState<string | null>(null);
+
+  // GitPullRequest PR form state
+  const [ghUrl, setGhUrl] = useState("");
+  const [ghUrlError, setGhUrlError] = useState<string | null>(null);
+  const [ghUseAi, setGhUseAi] = useState(false);
+
+  // Shared state
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
-  // Live path validation — updated on every keystroke
-  const [pathError, setPathError] = useState<string | null>(null);
 
   const set = (key: keyof AnalyzeRequest) => (val: string | boolean) =>
     setForm((f) => ({ ...f, [key]: val }));
 
   function handlePathChange(v: string) {
     set("repo_path")(v);
-    // Validate on the raw value so the user sees feedback while typing
     setPathError(v.trim() ? validateRepoPath(v) : null);
-    // Clear any previous server error when user edits the field
     setError(null);
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  function handleGhUrlChange(v: string) {
+    setGhUrl(v);
+    setGhUrlError(v.trim() ? validateGitHubUrl(v) : null);
+    setError(null);
+  }
 
-    // Run client-side validation first
-    const clientError = validateRepoPath(form.repo_path);
-    if (clientError) {
-      setPathError(clientError);
-      return;
-    }
-
-    setLoading(true);
+  function switchMode(m: AnalysisMode) {
+    setMode(m);
     setError(null);
     setResult(null);
+  }
+
+  function friendlyError(err: unknown): string {
+    const detail =
+      (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "";
+    const raw = (err as Error)?.message ?? "";
+    if (detail.toLowerCase().includes("not a git repository") || detail.toLowerCase().includes("does not exist"))
+      return "Path not found or is not a Git repository. Check the path and try again.";
+    if (detail.toLowerCase().includes("permission") || detail.toLowerCase().includes("access denied"))
+      return "Cannot read the repository â€” check folder permissions.";
+    if (detail.toLowerCase().includes("not found") || detail.toLowerCase().includes("404"))
+      return "Pull request not found. Verify the URL is correct and the repository is accessible.";
+    if (detail.toLowerCase().includes("rate limit"))
+      return "GitPullRequest API rate limit exceeded. Set GITHUB_TOKEN on the server or wait before retrying.";
+    if (detail.toLowerCase().includes("authentication") || detail.toLowerCase().includes("401"))
+      return "GitPullRequest authentication failed. Ask the server administrator to set GITHUB_TOKEN.";
+    if (detail.toLowerCase().includes("forbidden") || detail.toLowerCase().includes("403"))
+      return "Access denied. The repository may be private â€” set GITHUB_TOKEN with repo scope.";
+    if (detail) return detail;
+    if (raw.includes("Network Error") || raw.includes("ECONNREFUSED"))
+      return "Cannot reach the analysis API. Make sure the backend is running on port 8000.";
+    return "Analysis failed. Check your inputs and try again.";
+  }
+
+  async function handleLocalSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const clientError = validateRepoPath(form.repo_path);
+    if (clientError) { setPathError(clientError); return; }
+
+    setLoading(true); setError(null); setResult(null);
     try {
-      const req: AnalyzeRequest = {
-        ...form,
-        pr_author_email: form.pr_author_email?.trim() || undefined,
-      };
+      const req: AnalyzeRequest = { ...form, pr_author_email: form.pr_author_email?.trim() || undefined };
       const data = await runAnalysis(req);
       setResult(data);
       addRecord({
@@ -198,25 +244,32 @@ export function AnalyzePR() {
         timestamp: new Date().toISOString(),
         result: data,
       });
-    } catch (err: unknown) {
-      // Translate raw API / filesystem errors into plain language
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "";
-      const raw = (err as Error)?.message ?? "";
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setLoading(false);
+    }
+  }
 
-      let friendly: string;
-      if (detail.toLowerCase().includes("not a git repository") || detail.toLowerCase().includes("does not exist")) {
-        friendly = "Path not found or is not a Git repository. Check the path and try again.";
-      } else if (detail.toLowerCase().includes("permission") || detail.toLowerCase().includes("access denied")) {
-        friendly = "Cannot read the repository — check folder permissions.";
-      } else if (detail) {
-        friendly = detail;
-      } else if (raw.includes("Network Error") || raw.includes("ECONNREFUSED")) {
-        friendly = "Cannot reach the analysis API. Make sure the backend is running on port 8000.";
-      } else {
-        friendly = "Analysis failed. Check the repository path and refs, then try again.";
-      }
-      setError(friendly);
+  async function handleGitHubSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const clientError = validateGitHubUrl(ghUrl);
+    if (clientError) { setGhUrlError(clientError); return; }
+
+    setLoading(true); setError(null); setResult(null);
+    try {
+      const data = await runGitHubAnalysis({ pr_url: ghUrl.trim(), use_ai: ghUseAi });
+      setResult(data);
+      addRecord({
+        id: crypto.randomUUID(),
+        repo_path: ghUrl.trim(),
+        base_ref: data.base_ref,
+        head_ref: data.head_ref,
+        timestamp: new Date().toISOString(),
+        result: data,
+      });
+    } catch (err) {
+      setError(friendlyError(err));
     } finally {
       setLoading(false);
     }
@@ -227,126 +280,207 @@ export function AnalyzePR() {
       <div className="mb-8">
         <h1 className="text-2xl font-semibold text-white mb-1">PR Intelligence</h1>
         <p className="text-zinc-500 text-sm">
-          Point to a local Git repository and compare refs to generate a risk report.
+          Analyse a pull request from a local Git repository or directly from GitHub.
         </p>
       </div>
 
       <div className="grid lg:grid-cols-5 gap-6">
-        {/* Form */}
+        {/* Form panel */}
         <Card className="lg:col-span-2 h-fit">
-          <CardHeader>
-            <h2 className="text-sm font-semibold text-white">Analysis Parameters</h2>
-          </CardHeader>
+          {/* Mode tabs */}
+          <div className="flex border-b border-[#2a2a38]">
+            <button
+              onClick={() => switchMode("local")}
+              className={`flex-1 flex items-center justify-center gap-2 py-3 text-xs font-medium transition-colors ${
+                mode === "local"
+                  ? "text-white border-b-2 border-blue-500 -mb-px"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              <Folder className="w-3.5 h-3.5" />
+              Local Repo
+            </button>
+            <button
+              onClick={() => switchMode("github")}
+              className={`flex-1 flex items-center justify-center gap-2 py-3 text-xs font-medium transition-colors ${
+                mode === "github"
+                  ? "text-white border-b-2 border-blue-500 -mb-px"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              <GitPullRequest className="w-3.5 h-3.5" />
+              GitPullRequest PR
+            </button>
+          </div>
+
           <CardBody>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <RepoPathField
-                value={form.repo_path}
-                onChange={handlePathChange}
-                pathError={pathError}
-              />
-              <div className="grid grid-cols-2 gap-3">
+            {mode === "local" ? (
+              <form onSubmit={handleLocalSubmit} className="space-y-4">
+                <RepoPathField value={form.repo_path} onChange={handlePathChange} pathError={pathError} />
+                <div className="grid grid-cols-2 gap-3">
+                  <InputField label="Base Ref" id="base_ref" value={form.base_ref} onChange={set("base_ref")} placeholder="main" />
+                  <InputField label="Head Ref" id="head_ref" value={form.head_ref} onChange={set("head_ref")} placeholder="HEAD" />
+                </div>
                 <InputField
-                  label="Base Ref"
-                  id="base_ref"
-                  value={form.base_ref}
-                  onChange={set("base_ref")}
-                  placeholder="main"
+                  label="PR Author Email (optional)" id="pr_author_email"
+                  value={form.pr_author_email ?? ""} onChange={set("pr_author_email")}
+                  placeholder="dev@company.com" type="email"
                 />
-                <InputField
-                  label="Head Ref"
-                  id="head_ref"
-                  value={form.head_ref}
-                  onChange={set("head_ref")}
-                  placeholder="HEAD"
-                />
-              </div>
-              <InputField
-                label="PR Author Email (optional)"
-                id="pr_author_email"
-                value={form.pr_author_email ?? ""}
-                onChange={set("pr_author_email")}
-                placeholder="dev@company.com"
-                type="email"
-              />
-
-              {/* AI toggle */}
-              <label className="flex items-center gap-3 cursor-pointer select-none">
-                <div className="relative">
-                  <input
-                    type="checkbox"
-                    className="sr-only"
-                    checked={form.use_ai}
-                    onChange={(e) => set("use_ai")(e.target.checked)}
-                  />
-                  <div
-                    className={`w-9 h-5 rounded-full transition-colors ${form.use_ai ? "bg-blue-600" : "bg-zinc-700"}`}
-                  />
-                  <div
-                    className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${form.use_ai ? "translate-x-4" : ""}`}
-                  />
+                <AiToggle enabled={form.use_ai ?? false} onChange={(v) => set("use_ai")(v)} />
+                <SubmitButton loading={loading} disabled={!!pathError} />
+                {error && <ErrorBanner message={error} />}
+              </form>
+            ) : (
+              <form onSubmit={handleGitHubSubmit} className="space-y-4">
+                <GitHubUrlField value={ghUrl} onChange={handleGhUrlChange} urlError={ghUrlError} />
+                <div className="rounded-lg bg-[#18181f] border border-[#2a2a38] px-3 py-2.5 flex items-start gap-2.5">
+                  <Lock className="w-3.5 h-3.5 text-zinc-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-zinc-600 leading-relaxed">
+                    Your GitPullRequest token is kept on the server. Public repos work without a token.
+                    Private repos require{" "}
+                    <span className="font-mono text-zinc-500">GITHUB_TOKEN</span> with{" "}
+                    <span className="font-mono text-zinc-500">repo</span> scope.
+                  </p>
                 </div>
-                <div>
-                  <span className="text-sm text-zinc-300">AI explanations</span>
-                  <span className="ml-1.5 text-xs text-zinc-600">(requires GEMINI_API_KEY)</span>
-                </div>
-              </label>
-
-              <button
-                type="submit"
-                disabled={loading || !!pathError}
-                className="w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white text-sm font-medium rounded-lg transition-colors"
-              >
-                {loading ? (
-                  <>
-                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Analyzing…
-                  </>
-                ) : (
-                  <>
-                    <Zap className="w-4 h-4" />
-                    Run Analysis
-                  </>
-                )}
-              </button>
-
-              {error && (
-                <div className="flex items-start gap-2.5 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2.5">
-                  <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-red-400 leading-relaxed">{error}</p>
-                </div>
-              )}
-            </form>
+                <AiToggle enabled={ghUseAi} onChange={setGhUseAi} />
+                <SubmitButton loading={loading} disabled={!!ghUrlError} label="Analyse PR" />
+                {error && <ErrorBanner message={error} />}
+              </form>
+            )}
           </CardBody>
         </Card>
 
         {/* Result panel */}
         <div className="lg:col-span-3">
-          {!result && !loading && (
-            <EmptyAnalysis />
-          )}
+          {!result && !loading && <EmptyAnalysis mode={mode} />}
           {loading && <LoadingAnalysis />}
-          {result && <ResultPanel result={result} repoPath={form.repo_path} />}
+          {result && (
+            <ResultPanel
+              result={result}
+              repoPath={mode === "local" ? form.repo_path : ghUrl}
+            />
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function EmptyAnalysis() {
+// ---------------------------------------------------------------------------
+// Shared helper sub-components
+// ---------------------------------------------------------------------------
+
+function AiToggle({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="flex items-center gap-3 cursor-pointer select-none">
+      <div className="relative">
+        <input type="checkbox" className="sr-only" checked={enabled} onChange={(e) => onChange(e.target.checked)} />
+        <div className={`w-9 h-5 rounded-full transition-colors ${enabled ? "bg-blue-600" : "bg-zinc-700"}`} />
+        <div className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-4" : ""}`} />
+      </div>
+      <div>
+        <span className="text-sm text-zinc-300">AI explanations</span>
+        <span className="ml-1.5 text-xs text-zinc-600">(requires GEMINI_API_KEY)</span>
+      </div>
+    </label>
+  );
+}
+
+function SubmitButton({
+  loading, disabled, label = "Run Analysis",
+}: { loading: boolean; disabled: boolean; label?: string }) {
+  return (
+    <button
+      type="submit"
+      disabled={loading || disabled}
+      className="w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white text-sm font-medium rounded-lg transition-colors"
+    >
+      {loading ? (
+        <>
+          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+          Analysingâ€¦
+        </>
+      ) : (
+        <>
+          <Zap className="w-4 h-4" />
+          {label}
+        </>
+      )}
+    </button>
+  );
+}
+
+function ErrorBanner({ message }: { message: string }) {
+  return (
+    <div className="flex items-start gap-2.5 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2.5">
+      <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+      <p className="text-xs text-red-400 leading-relaxed">{message}</p>
+    </div>
+  );
+}
+
+function GitHubUrlField({
+  value, onChange, urlError,
+}: { value: string; onChange: (v: string) => void; urlError: string | null }) {
+  const borderClass = urlError
+    ? "border-red-500/60 focus:border-red-500/80 focus:ring-red-500/20"
+    : value.trim()
+    ? "border-emerald-500/40 focus:border-emerald-500/60 focus:ring-emerald-500/15"
+    : "border-[#2a2a38] focus:border-blue-500/60 focus:ring-blue-500/20";
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <label htmlFor="gh_url" className="text-xs font-medium text-zinc-400">GitPullRequest PR URL</label>
+        <span className="text-[10px] text-zinc-600 uppercase tracking-wide font-medium">required</span>
+      </div>
+      <div className="relative">
+        <GitPullRequest className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-600 pointer-events-none" />
+        <input
+          id="gh_url" type="url" value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="https://github.com/owner/repo/pull/123"
+          autoComplete="off" spellCheck={false}
+          className={`w-full bg-[#18181f] border rounded-lg pl-8 pr-3 py-2 text-sm text-white placeholder-zinc-700 focus:outline-none focus:ring-1 transition-colors font-mono ${borderClass}`}
+        />
+      </div>
+      {urlError ? (
+        <div className="mt-2 flex items-start gap-2 rounded-md px-3 py-2 bg-red-500/10 border border-red-500/20">
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-red-400" />
+          <p className="text-xs leading-relaxed text-red-400">{urlError}</p>
+        </div>
+      ) : !value.trim() && (
+        <div className="mt-1.5 flex items-start gap-1.5">
+          <Info className="w-3 h-3 text-zinc-700 flex-shrink-0 mt-0.5" />
+          <p className="text-[11px] text-zinc-600 leading-relaxed">
+            Paste the full URL to any public GitPullRequest PR.{" "}
+            <span className="font-mono text-zinc-700">e.g. https://github.com/facebook/react/pull/1</span>
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmptyAnalysis({ mode }: { mode?: AnalysisMode }) {
   return (
     <div className="h-full flex items-center justify-center text-center py-20">
       <div>
         <div className="w-14 h-14 rounded-xl bg-[#18181f] border border-[#2a2a38] flex items-center justify-center mx-auto mb-4">
-          <FileText className="w-7 h-7 text-zinc-600" />
+          {mode === "github" ? <GitPullRequest className="w-7 h-7 text-zinc-600" /> : <FileText className="w-7 h-7 text-zinc-600" />}
         </div>
         <p className="text-zinc-500 text-sm max-w-xs">
-          Fill in the repository path and refs, then click <strong className="text-zinc-300">Run Analysis</strong>.
+          {mode === "github"
+            ? <>Paste a GitPullRequest PR URL and click <strong className="text-zinc-300">Analyse PR</strong>.</>
+            : <>Fill in the repository path and refs, then click <strong className="text-zinc-300">Run Analysis</strong>.</>}
         </p>
-        <div className="mt-6 text-xs text-zinc-700 space-y-1">
-          <p>Quick start with the demo repo:</p>
-          <code className="text-zinc-600 font-mono">examples/demo-repo</code>
-          <p>Base: <code className="text-zinc-600 font-mono">main</code> · Head: <code className="text-zinc-600 font-mono">HEAD</code></p>
-        </div>
+        {mode !== "github" && (
+          <div className="mt-6 text-xs text-zinc-700 space-y-1">
+            <p>Quick start with the demo repo:</p>
+            <code className="text-zinc-600 font-mono">examples/demo-repo</code>
+            <p>Base: <code className="text-zinc-600 font-mono">main</code> Â· Head: <code className="text-zinc-600 font-mono">HEAD</code></p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -357,7 +491,7 @@ function LoadingAnalysis() {
     <Card className="p-8">
       <div className="flex flex-col items-center text-center py-8">
         <div className="w-12 h-12 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-4" />
-        <p className="text-sm text-zinc-300 font-medium mb-1">Analysing repository…</p>
+        <p className="text-sm text-zinc-300 font-medium mb-1">Analysing repositoryâ€¦</p>
         <p className="text-xs text-zinc-600">Reading Git history, scoring signals, detecting patterns</p>
       </div>
     </Card>
@@ -387,7 +521,7 @@ function ResultPanel({ result, repoPath }: { result: AnalysisResult; repoPath: s
               <div className="flex items-center gap-1.5">
                 <GitBranch className="w-3.5 h-3.5" />
                 <span className="font-mono text-zinc-500">
-                  {result.base_ref} → {result.head_ref}
+                  {result.base_ref} â†’ {result.head_ref}
                 </span>
               </div>
             </div>
@@ -458,7 +592,7 @@ function ResultPanel({ result, repoPath }: { result: AnalysisResult; repoPath: s
                   <ul className="space-y-1">
                     {sig.recommendations.map((r, i) => (
                       <li key={i} className="text-xs text-zinc-400 flex items-start gap-1.5">
-                        <span className="text-zinc-700 mt-0.5">→</span>
+                        <span className="text-zinc-700 mt-0.5">â†’</span>
                         {r}
                       </li>
                     ))}
@@ -529,3 +663,4 @@ function ResultPanel({ result, repoPath }: { result: AnalysisResult; repoPath: s
     </div>
   );
 }
+
