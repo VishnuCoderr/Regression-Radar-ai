@@ -209,7 +209,13 @@ def get_commits(
 
     result = _git(cmd, cwd=repo_path, check=False)
     if result.returncode != 0:
-        if "unknown revision" in result.stderr or "bad revision" in result.stderr:
+        err_lower = result.stderr.lower()
+        if (
+            "unknown revision" in err_lower
+            or "bad revision" in err_lower
+            or "does not have any commits yet" in err_lower
+            or "ambiguous argument" in err_lower
+        ):
             logger.warning(
                 "Reference %r not found in %s; returning empty commit list.",
                 base_ref or "HEAD",

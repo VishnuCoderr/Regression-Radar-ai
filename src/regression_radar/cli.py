@@ -235,6 +235,10 @@ def analyse_cmd(
         err_console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1)
 
+    if stats.total_commits == 0:
+        console.print("[yellow]Repository is empty (no commits yet).[/yellow]")
+        raise typer.Exit(0)
+
     effective_base = base or (stats.default_branch or "HEAD~1")
     effective_head = head or "HEAD"
 
@@ -247,25 +251,32 @@ def analyse_cmd(
 
     parsed_diff = parse_diff(raw_diff.text)
     changed_files = parsed_diff.changed_paths
+    renames = {f.path: f.old_path for f in parsed_diff.files if f.old_path and f.old_path != f.path}
+    deleted_files = [f.path for f in parsed_diff.files if f.change_type.value == "deleted"]
 
     # 2. Extract commit history (prior to PR or on base branch)
     history_commits = get_commits(repo, max_commits=max_commits, exclude_merges=True)
 
     # 3. Execute all 4 analysis signals
     hotspot_signal = calculate_hotspot_signal(
-        changed_files, history_commits, data_quality=stats.data_quality
+        changed_files, history_commits, data_quality=stats.data_quality, renames=renames
     )
     cochange_signal = calculate_cochange_signal(
-        changed_files, history_commits, data_quality=stats.data_quality
+        changed_files, history_commits, data_quality=stats.data_quality, renames=renames
     )
     test_gap_signal = calculate_test_gap_signal(
-        changed_files, history_commits, data_quality=stats.data_quality
+        changed_files,
+        history_commits,
+        data_quality=stats.data_quality,
+        renames=renames,
+        deleted_files=deleted_files,
     )
     ownership_signal = calculate_ownership_signal(
         changed_files,
         history_commits,
         pr_author_email=author,
         data_quality=stats.data_quality,
+        renames=renames,
     )
 
     signals = {

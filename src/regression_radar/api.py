@@ -114,6 +114,8 @@ def _run_analysis_from_data(
     additions: int,
     deletions: int,
     use_ai: bool = False,
+    renames: dict[str, str] | None = None,
+    deleted_files: list[str] | None = None,
 ) -> AnalysisResult:
     """
     Run all four analysis engines and return a structured AnalysisResult.
@@ -122,19 +124,24 @@ def _run_analysis_from_data(
     the local-repo endpoint and the GitHub PR endpoint.
     """
     hotspot_signal = calculate_hotspot_signal(
-        changed_files, history_commits, data_quality=data_quality
+        changed_files, history_commits, data_quality=data_quality, renames=renames
     )
     cochange_signal = calculate_cochange_signal(
-        changed_files, history_commits, data_quality=data_quality
+        changed_files, history_commits, data_quality=data_quality, renames=renames
     )
     test_gap_signal = calculate_test_gap_signal(
-        changed_files, history_commits, data_quality=data_quality
+        changed_files,
+        history_commits,
+        data_quality=data_quality,
+        renames=renames,
+        deleted_files=deleted_files,
     )
     ownership_signal = calculate_ownership_signal(
         changed_files,
         history_commits,
         pr_author_email=pr_author_email,
         data_quality=data_quality,
+        renames=renames,
     )
 
     signals = {
@@ -183,6 +190,12 @@ def _run_analysis(req: AnalyzeRequest) -> AnalysisResult:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if stats.total_commits == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Repository is empty (0 commits). Cannot analyze diff without commits.",
+        )
+
     try:
         raw_diff = get_diff(validated_path, base_ref=req.base_ref, head_ref=req.head_ref)
     except RuntimeError as exc:
@@ -191,6 +204,8 @@ def _run_analysis(req: AnalyzeRequest) -> AnalysisResult:
     parsed_diff = parse_diff(raw_diff.text)
     changed_files = parsed_diff.changed_paths
     history_commits = get_commits(validated_path, max_commits=2000, exclude_merges=True)
+    renames = {f.path: f.old_path for f in parsed_diff.files if f.old_path and f.old_path != f.path}
+    deleted_files = [f.path for f in parsed_diff.files if f.change_type.value == "deleted"]
 
     return _run_analysis_from_data(
         changed_files=changed_files,
@@ -203,6 +218,8 @@ def _run_analysis(req: AnalyzeRequest) -> AnalysisResult:
         additions=parsed_diff.total_additions,
         deletions=parsed_diff.total_deletions,
         use_ai=req.use_ai,
+        renames=renames,
+        deleted_files=deleted_files,
     )
 
 
@@ -261,6 +278,8 @@ def analyze_github_pr_endpoint(req: GitHubPRRequest) -> AnalysisResult:
     parsed_diff = parse_diff(gh_data.diff.text)
     # Prefer the file list from the API (more reliable) over parsed diff headers
     changed_files = gh_data.diff.changed_paths or parsed_diff.changed_paths
+    renames = {f.path: f.old_path for f in parsed_diff.files if f.old_path and f.old_path != f.path}
+    deleted_files = [f.path for f in parsed_diff.files if f.change_type.value == "deleted"]
 
     return _run_analysis_from_data(
         changed_files=changed_files,
@@ -273,6 +292,8 @@ def analyze_github_pr_endpoint(req: GitHubPRRequest) -> AnalysisResult:
         additions=gh_data.pr.additions,
         deletions=gh_data.pr.deletions,
         use_ai=req.use_ai,
+        renames=renames,
+        deleted_files=deleted_files,
     )
 
 

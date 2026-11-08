@@ -237,7 +237,7 @@ def _fetch_pr_metadata(owner: str, repo: str, number: int) -> GitHubPR:
     # Author email: GitHub doesn't expose it in PR payload, but we can use login
     # as the identifier for ownership scoring (we store it in author_email field)
     author = data.get("user") or {}
-    author_login = author.get("login", "")
+    author_login = author.get("login") or ""
 
     base = data.get("base") or {}
     head = data.get("head") or {}
@@ -246,18 +246,18 @@ def _fetch_pr_metadata(owner: str, repo: str, number: int) -> GitHubPR:
         owner=owner,
         repo=repo,
         number=number,
-        title=data.get("title", ""),
-        state=data.get("state", "open"),
-        base_ref=base.get("ref", "main"),
-        head_ref=head.get("ref", "HEAD"),
+        title=data.get("title") or "",
+        state=data.get("state") or "open",
+        base_ref=base.get("ref") or "main",
+        head_ref=head.get("ref") or "HEAD",
         head_sha=(head.get("sha") or "")[:7],
         author_login=author_login,
-        author_email=f"{author_login}@users.noreply.github.com",
-        additions=data.get("additions", 0),
-        deletions=data.get("deletions", 0),
-        changed_files=data.get("changed_files", 0),
-        is_draft=data.get("draft", False),
-        html_url=data.get("html_url", ""),
+        author_email=f"{author_login}@users.noreply.github.com" if author_login else "",
+        additions=data.get("additions") or 0,
+        deletions=data.get("deletions") or 0,
+        changed_files=data.get("changed_files") or 0,
+        is_draft=bool(data.get("draft", False)),
+        html_url=data.get("html_url") or "",
     )
 
 

@@ -151,8 +151,18 @@ def build_analysis_result(
         for s in sorted_signals:
             bullets.append(s.explanation)
 
+        unavailable = [s for s in signals.values() if not s.is_available]
+        for s in unavailable:
+            bullets.append(f"{s.name.replace('_', ' ').title()}: {s.explanation}")
+
         if not bullets:
-            bullets.append("No elevated risk indicators detected in this change set.")
+            if data_quality == DataQuality.LOW:
+                bullets.append(
+                    "Low repository history/quality available; "
+                    "risk assessment has reduced confidence."
+                )
+            else:
+                bullets.append("No elevated risk indicators detected in this change set.")
 
     actions = recommended_actions or RecommendedActions()
     if not actions.tests_to_run and "test_gap" in signals:

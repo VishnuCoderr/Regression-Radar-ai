@@ -55,6 +55,8 @@ def build_recommendations(
         for p in co.evidence.get("missing_partners", []):
             absent_partners.append(p.get("missing_partner"))
 
+    unavailable_signals = [s.name for s in signals.values() if not s.is_available]
+
     summary_parts = []
     if category in (RiskCategory.CRITICAL, RiskCategory.HIGH):
         summary_parts.append(
@@ -64,6 +66,11 @@ def build_recommendations(
         summary_parts.append(f"This change has moderate risk ({overall_score}/100).")
     else:
         summary_parts.append(f"This change has low risk ({overall_score}/100).")
+
+    if unavailable_signals:
+        summary_parts.append(
+            f"Note: Limited commit history; {len(unavailable_signals)} signal(s) were unavailable."
+        )
 
     if fragile_files:
         summary_parts.append(

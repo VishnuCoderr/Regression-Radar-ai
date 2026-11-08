@@ -119,11 +119,14 @@ def calculate_test_gap_signal(
     commits: Sequence[CommitInfo],
     repo_files: Sequence[str] | None = None,
     data_quality: DataQuality = DataQuality.HIGH,
+    renames: dict[str, str] | None = None,
+    deleted_files: Sequence[str] | None = None,
 ) -> SignalResult:
     """Evaluate test coverage gaps in a proposed change set."""
     changed_set = set(changed_files)
     changed_sources = [f for f in changed_files if is_source_file(f)]
     changed_tests = [f for f in changed_files if is_test_file(f)]
+    deleted_set = set(deleted_files or [])
 
     if not changed_sources:
         return SignalResult(
@@ -163,6 +166,9 @@ def calculate_test_gap_signal(
         strategy = "none"
 
         candidates = find_candidate_test_paths(src)
+        if renames and src in renames:
+            candidates.extend(find_candidate_test_paths(renames[src]))
+
         for cand in candidates:
             norm_cand = cand.replace("\\", "/")
             matching_in_repo = [k for k in all_known_files if k.replace("\\", "/") == norm_cand]
@@ -171,17 +177,23 @@ def calculate_test_gap_signal(
                 strategy = "name_convention"
                 break
 
-        if matched_test is None and src in source_to_cochange_tests:
-            cochange_tests = source_to_cochange_tests[src]
-            if cochange_tests:
-                best_test = max(cochange_tests.items(), key=lambda kv: kv[1])[0]
-                matched_test = best_test
-                strategy = "cochange"
+        if matched_test is None:
+            old_src = renames.get(src) if renames else None
+            lookup_sources = [src] + ([old_src] if old_src else [])
+            for s_key in lookup_sources:
+                if s_key in source_to_cochange_tests:
+                    cochange_tests = source_to_cochange_tests[s_key]
+                    if cochange_tests:
+                        best_test = max(cochange_tests.items(), key=lambda kv: kv[1])[0]
+                        matched_test = best_test
+                        strategy = "cochange"
+                        break
 
         is_test_in_pr = matched_test is not None and matched_test in changed_set
+        is_deleted = src in deleted_set
 
         if matched_test is None:
-            penalty = 75.0
+            penalty = 0.0 if is_deleted else 75.0
         elif is_test_in_pr:
             penalty = 0.0
         else:
