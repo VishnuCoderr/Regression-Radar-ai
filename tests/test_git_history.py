@@ -48,6 +48,12 @@ class TestValidateRepo:
         with pytest.raises(ValueError, match="not a directory"):
             validate_repo(f)
 
+    def test_non_git_subdir_inside_repo_raises(self, git_repo: GitRepoFixture) -> None:
+        sub_dir = git_repo.path / "subdir"
+        sub_dir.mkdir()
+        with pytest.raises(ValueError, match="Not a Git repository"):
+            validate_repo(sub_dir)
+
 
 # ---------------------------------------------------------------------------
 # get_repo_stats
