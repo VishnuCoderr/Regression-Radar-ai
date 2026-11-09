@@ -65,11 +65,16 @@ def load_scoring_config(config_path: Path | None = None) -> dict[str, Any]:
                 "high": int(data.get("thresholds", {}).get("high", 60)),
                 "critical": int(data.get("thresholds", {}).get("critical", 80)),
             }
-            return {"weights": weights, "thresholds": thresholds}
+            ci_gates = data.get("ci_gates", data.get("gates", {}))
+            return {"weights": weights, "thresholds": thresholds, "ci_gates": ci_gates}
         except Exception as exc:
             logger.warning("Failed to load weights config from %s: %s", config_path, exc)
 
-    return {"weights": DEFAULT_WEIGHTS.copy(), "thresholds": DEFAULT_THRESHOLDS.copy()}
+    return {
+        "weights": DEFAULT_WEIGHTS.copy(),
+        "thresholds": DEFAULT_THRESHOLDS.copy(),
+        "ci_gates": {},
+    }
 
 
 def classify_risk(score: float, thresholds: dict[str, int] | None = None) -> RiskCategory:

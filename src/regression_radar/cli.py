@@ -19,6 +19,13 @@ from rich.table import Table
 
 from regression_radar import __version__
 from regression_radar.cache import cached_get_commits, cached_get_diff
+from regression_radar.ci import (
+    evaluate_ci_gates,
+    format_ci_comment,
+    load_ci_gate_config,
+    parse_github_actions_context,
+    post_or_update_pr_comment,
+)
 from regression_radar.cochange import calculate_cochange_signal
 from regression_radar.diff_parser import parse_diff
 from regression_radar.git_history import (
@@ -228,6 +235,15 @@ def analyse_cmd(
         "--cache/--no-cache",
         help="Enable in-memory caching for Git history and diffs.",
     ),
+    max_risk: float | None = typer.Option(
+        None, "--max-risk", help="Fail CI gate if risk meets/exceeds this score."
+    ),
+    require_tests: bool = typer.Option(
+        False, "--require-tests", help="Fail CI gate if modified source files lack tests."
+    ),
+    blocking: bool = typer.Option(
+        False, "--blocking/--non-blocking", help="Block execution (exit 1) if gate fails."
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Analyse a pull request or ref comparison and produce an explainable risk report."""
@@ -346,6 +362,191 @@ def analyse_cmd(
             print(out_text)
     else:
         render_terminal_report(result, console)
+
+    # 8. Evaluate CI gates if configured
+    gate_cfg = load_ci_gate_config(
+        config,
+        max_risk=max_risk,
+        require_tests=require_tests,
+        blocking=blocking,
+    )
+    gate_eval = evaluate_ci_gates(result, gate_cfg)
+    if gate_eval.gate_failed:
+        if gate_eval.blocking:
+            err_console.print(f"\n[bold red]CI Gate Failed:[/bold red] {gate_eval.reasons[0]}")
+            raise typer.Exit(1)
+        else:
+            reason = gate_eval.reasons[0]
+            console.print(f"\n[bold yellow]CI Gate Warning (Non-blocking):[/bold yellow] {reason}")
+
+
+@app.command("ci")
+def ci_cmd(
+    repo: Path = typer.Option(
+        Path("."),
+        "--repo",
+        "-r",
+        help="Path to local repository.",
+        file_okay=False,
+        resolve_path=True,
+    ),
+    base: str | None = typer.Option(None, "--base", "-b", help="Base branch/ref."),
+    head: str | None = typer.Option(None, "--head", "-h", help="Head commit/ref."),
+    pr_number: int | None = typer.Option(None, "--pr", help="Pull request number."),
+    repo_slug: str | None = typer.Option(None, "--repo-slug", help="GitHub repo 'owner/repo'."),
+    max_risk: float | None = typer.Option(None, "--max-risk", help="Fail if risk >= threshold."),
+    require_tests: bool = typer.Option(False, "--require-tests", help="Fail if tests missing."),
+    blocking: bool = typer.Option(
+        False, "--blocking/--non-blocking", help="Block CI (exit 1) on gate failure."
+    ),
+    post_comment: bool = typer.Option(
+        True, "--post-comment/--no-post-comment", help="Publish/update sticky PR comment."
+    ),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Write report to file."),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config TOML path."),
+    author: str | None = typer.Option(None, "--author", help="PR author email."),
+    ai: bool = typer.Option(False, "--ai/--no-ai", help="Enable AI explanation if configured."),
+    cache: bool = typer.Option(True, "--cache/--no-cache", help="Use in-memory cache."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Run automated CI risk analysis, evaluate gates, and publish/update PR comment."""
+    _setup_logging(verbose)
+    actions_ctx = parse_github_actions_context()
+
+    try:
+        stats = get_repo_stats(repo)
+    except ValueError as exc:
+        err_console.print(f"[red]Repository Error:[/red] {exc}")
+        raise typer.Exit(1)
+
+    effective_base = base or actions_ctx.get("base_ref") or stats.default_branch or "main"
+    effective_head = head or actions_ctx.get("head_ref") or "HEAD"
+
+    # 1. Extract diff
+    try:
+        raw_diff = cached_get_diff(
+            repo,
+            base_ref=effective_base,
+            head_ref=effective_head,
+            bypass_cache=not cache,
+        )
+    except RuntimeError as exc:
+        err_console.print(f"[red]Diff error:[/red] {exc}")
+        raise typer.Exit(1)
+
+    parsed_diff = parse_diff(raw_diff.text)
+    changed_files = parsed_diff.changed_paths
+    renames = {f.path: f.old_path for f in parsed_diff.files if f.old_path and f.old_path != f.path}
+    deleted_files = [f.path for f in parsed_diff.files if f.change_type.value == "deleted"]
+
+    # 2. Extract commit history
+    history_commits = cached_get_commits(
+        repo,
+        max_commits=2000,
+        exclude_merges=True,
+        bypass_cache=not cache,
+    )
+
+    # 3. Execute all 4 analysis signals
+    hotspot_signal = calculate_hotspot_signal(
+        changed_files, history_commits, data_quality=stats.data_quality, renames=renames
+    )
+    cochange_signal = calculate_cochange_signal(
+        changed_files, history_commits, data_quality=stats.data_quality, renames=renames
+    )
+    test_gap_signal = calculate_test_gap_signal(
+        changed_files,
+        history_commits,
+        data_quality=stats.data_quality,
+        renames=renames,
+        deleted_files=deleted_files,
+    )
+    ownership_signal = calculate_ownership_signal(
+        changed_files,
+        history_commits,
+        pr_author_email=author,
+        data_quality=stats.data_quality,
+        renames=renames,
+    )
+
+    signals = {
+        "historical_hotspot": hotspot_signal,
+        "cochange_anomaly": cochange_signal,
+        "test_gap": test_gap_signal,
+        "ownership": ownership_signal,
+    }
+
+    # 4. Load scoring config and compute deterministic score
+    cfg = load_scoring_config(config)
+    score, category, effective_weights = compute_risk_score(
+        signals, weights=cfg["weights"], thresholds=cfg["thresholds"]
+    )
+    actions = build_recommendations(signals, score, category)
+
+    result = build_analysis_result(
+        signals=signals,
+        base_ref=effective_base,
+        head_ref=effective_head,
+        total_files_changed=len(parsed_diff.files),
+        additions=parsed_diff.total_additions,
+        deletions=parsed_diff.total_deletions,
+        data_quality=stats.data_quality,
+        custom_weights=effective_weights,
+        custom_thresholds=cfg["thresholds"],
+        recommended_actions=actions,
+    )
+
+    if ai:
+        enhanced_actions = generate_ai_explanation(result)
+        result.recommended_actions = enhanced_actions
+
+    # 5. Evaluate CI gates
+    gate_cfg = load_ci_gate_config(
+        config,
+        max_risk=max_risk,
+        require_tests=require_tests,
+        blocking=blocking,
+    )
+    gate_eval = evaluate_ci_gates(result, gate_cfg)
+
+    # 6. Format Markdown comment
+    comment_body = format_ci_comment(result, gate_eval)
+
+    if output:
+        output.write_text(comment_body, encoding="utf-8")
+        console.print(f"[green]Report written to {output}[/green]")
+
+    # 7. Post or update PR comment if in PR context
+    effective_pr = pr_number or actions_ctx.get("pr_number")
+    effective_owner = actions_ctx.get("owner")
+    effective_repo_name = actions_ctx.get("repo")
+    if repo_slug and "/" in repo_slug:
+        effective_owner, effective_repo_name = repo_slug.split("/", 1)
+
+    if post_comment and effective_owner and effective_repo_name and effective_pr:
+        console.print(
+            f"[bold blue]Updating PR #{effective_pr} comment on "
+            f"{effective_owner}/{effective_repo_name}...[/bold blue]"
+        )
+        comment_res = post_or_update_pr_comment(
+            owner=effective_owner,
+            repo=effective_repo_name,
+            pr_number=effective_pr,
+            body=comment_body,
+        )
+        console.print(f"[green]Comment result:[/green] {comment_res.get('status')}")
+
+    # 8. Render terminal summary & gate decision
+    render_terminal_report(result, console)
+    console.rule("[bold]CI Gate Decision[/bold]")
+    gate_msg = gate_eval.reasons[0] if gate_eval.reasons else "Evaluated"
+    if not gate_eval.gate_failed:
+        console.print(f"[bold green]✓ GATE PASSED[/bold green]: {gate_msg}")
+    elif gate_eval.blocking:
+        err_console.print(f"[bold red]✗ GATE BLOCKED (Strict Mode)[/bold red]: {gate_msg}")
+        raise typer.Exit(1)
+    else:
+        console.print(f"[bold yellow]! GATE WARNING (Non-blocking)[/bold yellow]: {gate_msg}")
 
 
 def _quality_badge(quality: DataQuality) -> None:

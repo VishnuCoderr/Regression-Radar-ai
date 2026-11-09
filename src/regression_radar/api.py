@@ -30,8 +30,8 @@ from regression_radar.git_history import (
     validate_repo,
 )
 from regression_radar.github_service import (
-    GitHubAPIError,
     GitHubAnalysisData,
+    GitHubAPIError,
     parse_pr_url,
 )
 from regression_radar.hotspot import calculate_hotspot_signal

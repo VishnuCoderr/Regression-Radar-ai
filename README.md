@@ -110,11 +110,33 @@ The output will automatically detect:
 
 ---
 
-## GitHub Actions Integration
+## GitHub Actions & CI/CD Gates
 
-Regression Radar includes a ready-to-run GitHub Action workflow in [`.github/workflows/regression-radar.yml`](.github/workflows/regression-radar.yml).
+Regression Radar integrates directly into CI/CD pipelines via GitHub Actions and the `rr ci` command.
 
-On every pull request, it runs analysis against the base branch and posts a formatted, sticky comment to the PR discussion. Subsequent commits update the comment without spamming notifications.
+### Features
+- **Automated PR Analysis:** Triggers on `pull_request` (`opened`, `synchronize`, `reopened`).
+- **Sticky PR Comment Bot:** Publishes a single formatted risk report per PR and updates it in-place via `PATCH` on new commits to avoid discussion spam.
+- **Configurable CI Risk Gates:**
+  - `max_risk_score`: Fail gate when risk meets or exceeds threshold (e.g. `60.0`).
+  - `require_test_coverage`: Enforce matching tests for all modified source files.
+  - `blocking`: Default is **non-blocking** (informational warnings and reports). Enable `--blocking` to fail the CI job (exit code 1) on gate failure.
+- **Security & Least Privilege:**
+  - Requires only `contents: read` and `pull-requests: write`.
+  - Analyzes repository history and diffs statically; **never executes untrusted PR code**.
+  - Secrets (`GITHUB_TOKEN`, `GEMINI_API_KEY`) remain strictly in environment variables and are never exposed in logs.
+
+### Running CI Locally or in Custom Pipelines
+
+```bash
+# Non-blocking analysis with sticky comment update (default)
+rr ci --base main --head HEAD --max-risk 60
+
+# Strict blocking mode: fails CI (exit 1) if risk >= 60 or tests are missing
+rr ci --base main --head HEAD --max-risk 60 --require-tests --blocking
+```
+
+See [`.github/workflows/regression-radar.yml`](.github/workflows/regression-radar.yml) for the full reusable workflow.
 
 ---
 
