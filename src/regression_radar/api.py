@@ -7,11 +7,19 @@ and retrieving structured analysis results.
 
 from __future__ import annotations
 
+import logging
+import shutil
+import subprocess
+import time
+import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.responses import Response
 
 from regression_radar import __version__
 from regression_radar.cache import (
@@ -22,6 +30,7 @@ from regression_radar.cache import (
     get_all_cache_stats,
 )
 from regression_radar.cochange import calculate_cochange_signal
+from regression_radar.config import settings
 from regression_radar.diff_parser import parse_diff
 from regression_radar.git_history import (
     CommitInfo,
@@ -47,6 +56,9 @@ from regression_radar.scoring import (
 )
 from regression_radar.test_gap import calculate_test_gap_signal
 
+logger = logging.getLogger(__name__)
+_APP_START_TIME = time.time()
+
 app = FastAPI(
     title="Regression Radar API",
     description="Backend service for Pull Request Risk Analysis",
@@ -55,11 +67,54 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def resolve_request_id(incoming_id: str | None = None) -> str:
+    """Return incoming request ID or generate a new UUID4 string."""
+    return incoming_id if incoming_id and incoming_id.strip() else str(uuid.uuid4())
+
+
+def apply_response_headers(
+    request_id: str, start_time: float, response: Response
+) -> None:
+    """Attach correlation X-Request-ID and response timing headers."""
+    duration_ms = (time.perf_counter() - start_time) * 1000
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Response-Time-Ms"] = f"{duration_ms:.2f}"
+
+
+@app.middleware("http")
+async def request_id_and_logging_middleware(
+    request: Request, call_next
+) -> Response:
+    """Attach correlation X-Request-ID and response timing headers."""
+    t0 = time.perf_counter()
+    request_id = resolve_request_id(request.headers.get("X-Request-ID"))
+    request.state.request_id = request_id
+
+    response: Response = await call_next(request)
+    apply_response_headers(request_id, t0, response)
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Safe production exception handler preventing internal stack trace leaks."""
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.exception("Unhandled error on %s [request_id=%s]: %s", request.url.path, request_id, exc)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "An internal server error occurred.",
+            "request_id": request_id,
+        },
+        headers={"X-Request-ID": request_id},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -87,15 +142,76 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class ReadinessResponse(BaseModel):
+    status: str
+    version: str
+    git_available: bool
+    git_version: str | None
+    storage_writable: bool
+    cache_entries: int
+    uptime_seconds: float
+
+
 # ---------------------------------------------------------------------------
 # Shared health / config endpoints
 # ---------------------------------------------------------------------------
 
 
 @app.get("/health", response_model=HealthResponse)
+@app.get("/health/live", response_model=HealthResponse)
 def health_check() -> HealthResponse:
-    """Service health and version check."""
+    """Liveness probe: verifies process is alive and responsive."""
     return HealthResponse(status="healthy", version=__version__)
+
+
+@app.get("/health/ready", response_model=ReadinessResponse)
+def readiness_check() -> ReadinessResponse:
+    """Readiness probe: validates critical dependencies (git, storage, cache)."""
+    git_bin = shutil.which("git")
+    git_available = False
+    git_version = None
+
+    if git_bin:
+        try:
+            res = subprocess.run(
+                ["git", "--version"], capture_output=True, text=True, timeout=5
+            )
+            if res.returncode == 0:
+                git_available = True
+                git_version = res.stdout.strip()
+        except Exception:
+            pass
+
+    # Validate storage directory write permissions
+    storage_writable = False
+    try:
+        settings.storage_path.mkdir(parents=True, exist_ok=True)
+        probe = settings.storage_path / ".probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        storage_writable = True
+    except Exception:
+        storage_writable = False
+
+    all_stats = get_all_cache_stats()
+    total_cache_entries = sum(c.get("size", 0) for c in all_stats.values())
+    uptime = time.time() - _APP_START_TIME
+
+    if not git_available:
+        raise HTTPException(
+            status_code=503,
+            detail="Git executable not found or not responding on system PATH.",
+        )
+
+    return ReadinessResponse(
+        status="ready",
+        version=__version__,
+        git_available=git_available,
+        git_version=git_version,
+        storage_writable=storage_writable,
+        cache_entries=total_cache_entries,
+        uptime_seconds=round(uptime, 2),
+    )
 
 
 @app.get("/api/v1/config")
@@ -349,3 +465,29 @@ def cache_clear_endpoint() -> dict:
     """Clear all in-memory caches."""
     clear_all_caches()
     return {"status": "cleared"}
+
+
+# ---------------------------------------------------------------------------
+# Production Static UI Serving (SPA fallback)
+# ---------------------------------------------------------------------------
+
+_ui_dist = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
+if settings.serve_static_ui and _ui_dist.is_dir():
+    _assets_dir = _ui_dist / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str) -> Response:
+        """Serve compiled React SPA assets with index.html fallback for client-side routing."""
+        # Prevent static handler from hijacking API or health routes
+        if full_path.startswith("api/") or full_path.startswith("health"):
+            raise HTTPException(status_code=404, detail="API route not found")
+
+        requested = _ui_dist / full_path
+        if full_path and requested.is_file():
+            return FileResponse(requested)
+        index_file = _ui_dist / "index.html"
+        if index_file.is_file():
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="SPA index file not found")

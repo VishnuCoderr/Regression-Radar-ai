@@ -1,12 +1,33 @@
 services:
   regression-radar:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: regression-radar
     ports:
       - "8000:8000"
     environment:
+      - PORT=8000
+      - RR_HOST=0.0.0.0
       - LOG_LEVEL=INFO
+      - LOG_FORMAT=text
+      - CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - SERVE_STATIC_UI=true
+      - STORAGE_PATH=/app/data
     volumes:
-      # Optional: mount local repository storage
-      - .:/app/mounted-repo:ro
+      - regression-radar-storage:/app/data
+      # Optional: Mount local repositories to analyse inside container
+      # - /path/to/host/repo:/app/mounted-repo:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
+
+volumes:
+  regression-radar-storage:
+    driver: local
