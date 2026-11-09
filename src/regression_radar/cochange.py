@@ -24,6 +24,7 @@ def calculate_cochange_signal(
     min_support: int = 3,
     min_confidence: float = 0.50,
     data_quality: DataQuality = DataQuality.HIGH,
+    renames: dict[str, str] | None = None,
 ) -> SignalResult:
     """Mine historical co-change patterns and detect missing related files."""
     changed_set = set(changed_files)
@@ -75,41 +76,50 @@ def calculate_cochange_signal(
     anomaly_scores: list[float] = []
 
     for fa in changed_set:
-        freq_a = file_frequencies.get(fa, 0)
-        if freq_a < min_support:
-            continue
+        lookup_fas = [fa]
+        if renames and fa in renames:
+            lookup_fas.append(renames[fa])
 
-        for (f1, f2), support in pair_counts.items():
-            if f1 != fa and f2 != fa:
+        for target_fa in lookup_fas:
+            freq_a = file_frequencies.get(target_fa, 0)
+            if freq_a < min_support:
                 continue
 
-            fb = f2 if f1 == fa else f1
-            confidence = support / freq_a
+            for (f1, f2), support in pair_counts.items():
+                if f1 != target_fa and f2 != target_fa:
+                    continue
 
-            if support >= min_support and confidence >= min_confidence:
-                shas = pair_commits.get((min(f1, f2), max(f1, f2)), [])
+                fb = f2 if f1 == target_fa else f1
+                confidence = support / freq_a
 
-                if fb not in changed_set:
-                    missing_score = round(confidence * 100.0, 1)
-                    anomaly_scores.append(missing_score)
-                    missing_partners.append(
-                        {
-                            "changed_file": fa,
-                            "missing_partner": fb,
-                            "support": support,
-                            "confidence": round(confidence, 3),
-                            "example_shas": shas,
-                        }
+                if support >= min_support and confidence >= min_confidence:
+                    shas = pair_commits.get((min(f1, f2), max(f1, f2)), [])
+
+                    is_fb_present = fb in changed_set or (
+                        renames is not None and fb in renames.values()
                     )
-                else:
-                    satisfied_partners.append(
-                        {
-                            "changed_file": fa,
-                            "cochanged_partner": fb,
-                            "support": support,
-                            "confidence": round(confidence, 3),
-                        }
-                    )
+
+                    if not is_fb_present:
+                        missing_score = round(confidence * 100.0, 1)
+                        anomaly_scores.append(missing_score)
+                        missing_partners.append(
+                            {
+                                "changed_file": fa,
+                                "missing_partner": fb,
+                                "support": support,
+                                "confidence": round(confidence, 3),
+                                "example_shas": shas,
+                            }
+                        )
+                    else:
+                        satisfied_partners.append(
+                            {
+                                "changed_file": fa,
+                                "cochanged_partner": fb,
+                                "support": support,
+                                "confidence": round(confidence, 3),
+                            }
+                        )
 
     # Sort missing partners by confidence descending
     missing_partners.sort(key=lambda x: (float(x["confidence"]), int(x["support"])), reverse=True)

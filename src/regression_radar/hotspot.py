@@ -21,6 +21,7 @@ def calculate_hotspot_signal(
     changed_files: Sequence[str],
     commits: Sequence[CommitInfo],
     data_quality: DataQuality = DataQuality.HIGH,
+    renames: dict[str, str] | None = None,
 ) -> SignalResult:
     """Calculate the Historical Hotspot risk signal for a set of changed files."""
     if not changed_files:
@@ -67,8 +68,18 @@ def calculate_hotspot_signal(
     file_scores: list[float] = []
 
     for path in changed_files:
-        total_f = file_total_commits.get(path, 0)
-        bugs_f = file_bugfix_commits.get(path, 0)
+        lookup_paths = [path]
+        if renames and path in renames:
+            lookup_paths.append(renames[path])
+
+        total_f = sum(file_total_commits.get(p, 0) for p in lookup_paths)
+        bugs_f = sum(file_bugfix_commits.get(p, 0) for p in lookup_paths)
+
+        shas: list[str] = []
+        for p in lookup_paths:
+            for s in file_bugfix_shas.get(p, []):
+                if s not in shas and len(shas) < 5:
+                    shas.append(s)
 
         if total_f == 0:
             ev = FileHotspotEvidence(
@@ -99,7 +110,7 @@ def calculate_hotspot_signal(
             bugfix_commits=bugs_f,
             bugfix_ratio=round(raw_ratio, 3),
             risk_score=file_risk,
-            bugfix_shas=file_bugfix_shas.get(path, []),
+            bugfix_shas=shas,
         )
         file_evidences.append(ev)
         file_scores.append(file_risk)

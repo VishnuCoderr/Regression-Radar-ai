@@ -42,6 +42,15 @@ export interface AnalyzeRequest {
   use_ai?: boolean;
 }
 
+export interface GitHubPRRequest {
+  pr_url: string;
+  use_ai?: boolean;
+}
+
+export interface TokenStatus {
+  has_token: boolean;
+}
+
 export interface HealthResponse {
   status: string;
   version: string;
@@ -50,6 +59,24 @@ export interface HealthResponse {
 export interface ScoringConfig {
   weights: Record<string, number>;
   thresholds: Record<string, number>;
+}
+
+export interface DemoScenario {
+  id: string;
+  title: string;
+  description: string;
+  category: "high" | "low" | "github";
+  expected_score?: number | null;
+  pr_url?: string | null;
+  repo_path?: string | null;
+  base_ref?: string | null;
+  head_ref?: string | null;
+  author?: string | null;
+}
+
+export interface DemoRunRequest {
+  scenario_id: string;
+  use_ai?: boolean;
 }
 
 // App-internal types

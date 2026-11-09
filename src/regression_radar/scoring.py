@@ -65,11 +65,16 @@ def load_scoring_config(config_path: Path | None = None) -> dict[str, Any]:
                 "high": int(data.get("thresholds", {}).get("high", 60)),
                 "critical": int(data.get("thresholds", {}).get("critical", 80)),
             }
-            return {"weights": weights, "thresholds": thresholds}
+            ci_gates = data.get("ci_gates", data.get("gates", {}))
+            return {"weights": weights, "thresholds": thresholds, "ci_gates": ci_gates}
         except Exception as exc:
             logger.warning("Failed to load weights config from %s: %s", config_path, exc)
 
-    return {"weights": DEFAULT_WEIGHTS.copy(), "thresholds": DEFAULT_THRESHOLDS.copy()}
+    return {
+        "weights": DEFAULT_WEIGHTS.copy(),
+        "thresholds": DEFAULT_THRESHOLDS.copy(),
+        "ci_gates": {},
+    }
 
 
 def classify_risk(score: float, thresholds: dict[str, int] | None = None) -> RiskCategory:
@@ -151,8 +156,18 @@ def build_analysis_result(
         for s in sorted_signals:
             bullets.append(s.explanation)
 
+        unavailable = [s for s in signals.values() if not s.is_available]
+        for s in unavailable:
+            bullets.append(f"{s.name.replace('_', ' ').title()}: {s.explanation}")
+
         if not bullets:
-            bullets.append("No elevated risk indicators detected in this change set.")
+            if data_quality == DataQuality.LOW:
+                bullets.append(
+                    "Low repository history/quality available; "
+                    "risk assessment has reduced confidence."
+                )
+            else:
+                bullets.append("No elevated risk indicators detected in this change set.")
 
     actions = recommended_actions or RecommendedActions()
     if not actions.tests_to_run and "test_gap" in signals:

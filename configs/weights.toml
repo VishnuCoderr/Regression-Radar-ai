@@ -41,3 +41,15 @@ patterns = [
   "\\bpatch\\b",
   "\\bregression\\b",
 ]
+
+[ci_gates]
+# Repository-level CI risk gate settings
+# Fail CI gate when risk score meets or exceeds this threshold (e.g. 60.0)
+max_risk_score = 60.0
+
+# Require matching tests for all modified source files
+require_test_coverage = false
+
+# Default to non-blocking mode (false = warnings only; true = block PR merge)
+blocking = false
+

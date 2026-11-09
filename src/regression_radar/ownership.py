@@ -25,6 +25,7 @@ def calculate_ownership_signal(
     pr_author_email: str | None = None,
     recency_days: int = 180,
     data_quality: DataQuality = DataQuality.HIGH,
+    renames: dict[str, str] | None = None,
 ) -> SignalResult:
     """Analyse module ownership and suggest candidate reviewers from Git history."""
     if not changed_files:
@@ -48,6 +49,8 @@ def calculate_ownership_signal(
         )
 
     changed_set = set(changed_files)
+    if renames:
+        changed_set.update(renames.values())
     now = datetime.now(tz=UTC)
 
     # 1. Tally commits and recency for changed files

@@ -81,13 +81,25 @@ def validate_repo(repo_path: Path) -> Path:
     if not repo_path.is_dir():
         raise ValueError(f"Path is not a directory: {repo_path}")
 
+    has_git = (repo_path / ".git").exists()
+    is_bare = False
+    if not has_git:
+        bare_check = _git(["rev-parse", "--is-bare-repository"], cwd=repo_path, check=False)
+        if bare_check.returncode == 0 and bare_check.stdout.strip() == "true":
+            git_dir = _git(["rev-parse", "--git-dir"], cwd=repo_path, check=False)
+            if git_dir.returncode == 0 and git_dir.stdout.strip() == ".":
+                is_bare = True
+
+    if not has_git and not is_bare:
+        raise ValueError(f"Not a Git repository: {repo_path}")
+
     result = _git(["rev-parse", "--git-dir"], cwd=repo_path, check=False)
     if result.returncode != 0:
-        raise ValueError(f"Not a Git repository (or any parent up to mount point): {repo_path}")
+        raise ValueError(f"Not a Git repository: {repo_path}")
 
     # Resolve to actual worktree root
     root_result = _git(["rev-parse", "--show-toplevel"], cwd=repo_path, check=False)
-    if root_result.returncode == 0:
+    if root_result.returncode == 0 and root_result.stdout.strip():
         return Path(root_result.stdout.strip())
     return repo_path
 
@@ -197,7 +209,13 @@ def get_commits(
 
     result = _git(cmd, cwd=repo_path, check=False)
     if result.returncode != 0:
-        if "unknown revision" in result.stderr or "bad revision" in result.stderr:
+        err_lower = result.stderr.lower()
+        if (
+            "unknown revision" in err_lower
+            or "bad revision" in err_lower
+            or "does not have any commits yet" in err_lower
+            or "ambiguous argument" in err_lower
+        ):
             logger.warning(
                 "Reference %r not found in %s; returning empty commit list.",
                 base_ref or "HEAD",
