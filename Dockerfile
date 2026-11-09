@@ -29,18 +29,15 @@ RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
 
 WORKDIR /app
 
-# Copy dependency specifications first for optimal layer caching
+# Copy project metadata, configurations, Python source code, and demo scenarios
 COPY pyproject.toml README.md ./
 COPY configs/ configs/
-
-# Install Python dependencies and regression-radar package
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir ".[api]" && \
-    pip install --no-cache-dir -e .
-
-# Copy backend source code and demo scenario generators
 COPY src/ src/
 COPY examples/ examples/
+
+# Install Python dependencies and package with [api] extras
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir ".[api]"
 
 # Copy compiled React frontend assets from Stage 1
 COPY --from=frontend-builder /build/ui/dist /app/ui/dist
