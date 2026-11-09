@@ -175,6 +175,7 @@ export function Overview() {
 }
 
 function RecentRow({ rec }: { rec: AnalysisRecord }) {
+  const { selectRecord } = useAnalysisStore();
   const name = rec.repo_path.split(/[\\/]/).pop() ?? rec.repo_path;
   const date = new Date(rec.timestamp).toLocaleTimeString([], {
     hour: "2-digit",
@@ -182,7 +183,8 @@ function RecentRow({ rec }: { rec: AnalysisRecord }) {
   });
   return (
     <Link
-      to="/history"
+      to="/analyze"
+      onClick={() => selectRecord(rec)}
       className="flex items-center gap-4 px-5 py-3 hover:bg-white/[0.02] transition-colors"
     >
       <div className="flex-1 min-w-0">

@@ -1,28 +1,21 @@
-// src/pages/AnalyzePR.tsx â€” PR Intelligence / Analysis page (flagship)
-import React, { useState } from "react";
+// src/pages/AnalyzePR.tsx — PR Intelligence / Analysis page (flagship)
+import React, { useState, useEffect } from "react";
 import {
   Zap, Folder, GitBranch, User, AlertTriangle, ChevronDown, ChevronUp,
   CheckCircle2, Users, TestTube2, FileText, Sparkles, Info, GitPullRequest, Lock,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
-// Path validation â€” runs entirely client-side, before hitting the API
+// Path validation — runs entirely client-side, before hitting the API
 // ---------------------------------------------------------------------------
 function validateRepoPath(raw: string): string | null {
   const v = raw.trim();
 
   if (!v) return "Repository path is required.";
 
-  // GitPullRequest / HTTP URLs
+  // GitHub / HTTP URLs
   if (/^https?:\/\//i.test(v) || /^git@/i.test(v) || /^github\.com/i.test(v)) {
-    return "GitPullRequest URL analysis is not supported here yet. Use a local clone.";
-  }
-
-  // Must look like an absolute path (Windows C:\ / D:\ or Unix /)
-  const isWindowsAbsolute = /^[A-Za-z]:[/\\]/.test(v);
-  const isUnixAbsolute = v.startsWith("/");
-  if (!isWindowsAbsolute && !isUnixAbsolute) {
-    return "Please enter an absolute path (e.g. C:\\Users\\you\\my-repo or /home/you/my-repo).";
+    return "GitHub PR URL detected! Switch to the 'GitHub PR' tab above to analyze it directly.";
   }
 
   // Reject obviously wrong suffixes
@@ -34,14 +27,14 @@ function validateRepoPath(raw: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// GitPullRequest PR URL validation â€” client-side, before hitting the API
+// GitHub PR URL validation — client-side, before hitting the API
 // ---------------------------------------------------------------------------
 function validateGitHubUrl(raw: string): string | null {
   const v = raw.trim();
-  if (!v) return "GitPullRequest PR URL is required.";
+  if (!v) return "GitHub PR URL is required.";
   const pattern = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/?$/i;
   if (!pattern.test(v.split("?")[0].split("#")[0])) {
-    return "Enter a valid GitPullRequest PR URL: https://github.com/<owner>/<repo>/pull/<number>";
+    return "Enter a valid GitHub PR URL: https://github.com/<owner>/<repo>/pull/<number>";
   }
   return null;
 }
@@ -49,7 +42,7 @@ import { Card, CardBody, CardHeader } from "../components/ui/Card";
 import { RiskBadge } from "../components/ui/Badge";
 import { ScoreGauge } from "../components/ui/ScoreGauge";
 import { SignalBar } from "../components/ui/SignalBar";
-import { runAnalysis, runGitHubAnalysis } from "../api/client";
+import { runAnalysis, runGitHubAnalysis, runDemoScenario } from "../api/client";
 import { useAnalysisStore } from "../store/analysisStore";
 import type { AnalysisResult, AnalyzeRequest } from "../types/api";
 
@@ -94,7 +87,7 @@ function RepoPathField({
   pathError: string | null;
 }) {
   const isGitHubError =
-    pathError?.startsWith("GitPullRequest URL") ?? false;
+    pathError?.includes("GitHub PR URL") ?? false;
 
   const borderClass = pathError
     ? "border-red-500/60 focus:border-red-500/80 focus:ring-red-500/20"
@@ -142,14 +135,14 @@ function RepoPathField({
           </p>
         </div>
       ) : (
-        /* Helper text â€” always visible when field is empty */
+        /* Helper text — always visible when field is empty */
         !value.trim() && (
           <div className="mt-1.5 flex items-start gap-1.5">
             <Info className="w-3 h-3 text-zinc-700 flex-shrink-0 mt-0.5" />
             <p className="text-[11px] text-zinc-600 leading-relaxed">
-              Enter the absolute path to a Git repository on your machine.{" "}
+              Enter the absolute or relative path to a Git repository on your machine.{" "}
               <span className="font-mono text-zinc-700">
-                e.g. C:\Users\you\my-repo
+                e.g. examples/demo-repo
               </span>
             </p>
           </div>
@@ -160,7 +153,7 @@ function RepoPathField({
 }
 
 export function AnalyzePR() {
-  const { addRecord } = useAnalysisStore();
+  const { addRecord, selectedRecord, selectRecord } = useAnalysisStore();
   const [mode, setMode] = useState<AnalysisMode>("local");
 
   // Local repo form state
@@ -173,7 +166,7 @@ export function AnalyzePR() {
   });
   const [pathError, setPathError] = useState<string | null>(null);
 
-  // GitPullRequest PR form state
+  // GitHub PR form state
   const [ghUrl, setGhUrl] = useState("");
   const [ghUrlError, setGhUrlError] = useState<string | null>(null);
   const [ghUseAi, setGhUseAi] = useState(false);
@@ -182,6 +175,26 @@ export function AnalyzePR() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
+
+  useEffect(() => {
+    if (selectedRecord) {
+      if (selectedRecord.repo_path.startsWith("http")) {
+        setMode("github");
+        setGhUrl(selectedRecord.repo_path);
+      } else {
+        setMode("local");
+        setForm({
+          repo_path: selectedRecord.repo_path,
+          base_ref: selectedRecord.base_ref,
+          head_ref: selectedRecord.head_ref,
+          pr_author_email: "",
+          use_ai: false,
+        });
+      }
+      setResult(selectedRecord.result);
+      selectRecord(null);
+    }
+  }, [selectedRecord, selectRecord]);
 
   const set = (key: keyof AnalyzeRequest) => (val: string | boolean) =>
     setForm((f) => ({ ...f, [key]: val }));
@@ -204,6 +217,54 @@ export function AnalyzePR() {
     setResult(null);
   }
 
+  async function handleLoadDemo(scenarioId: string) {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const data = await runDemoScenario({ scenario_id: scenarioId, use_ai: form.use_ai });
+      setResult(data);
+      let label = scenarioId;
+      if (scenarioId === "high-risk-payment") {
+        setMode("local");
+        setForm((f) => ({
+          ...f,
+          repo_path: "examples/high-risk-demo",
+          base_ref: "main",
+          head_ref: "HEAD",
+          pr_author_email: "new@example.com",
+        }));
+        label = "High-Risk Payment Demo";
+      } else if (scenarioId === "safe-pr") {
+        setMode("local");
+        setForm((f) => ({
+          ...f,
+          repo_path: "examples/demo-repo",
+          base_ref: "main",
+          head_ref: "feature/safe-user-update",
+          pr_author_email: "ananya@example.com",
+        }));
+        label = "Safe PR Demo";
+      } else if (scenarioId === "sample-github-pr") {
+        setMode("github");
+        setGhUrl("https://github.com/octocat/Hello-World/pull/1");
+        label = "https://github.com/octocat/Hello-World/pull/1";
+      }
+      addRecord({
+        id: crypto.randomUUID(),
+        repo_path: label,
+        base_ref: data.base_ref,
+        head_ref: data.head_ref,
+        timestamp: new Date().toISOString(),
+        result: data,
+      });
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function friendlyError(err: unknown): string {
     const detail =
       (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "";
@@ -211,15 +272,15 @@ export function AnalyzePR() {
     if (detail.toLowerCase().includes("not a git repository") || detail.toLowerCase().includes("does not exist"))
       return "Path not found or is not a Git repository. Check the path and try again.";
     if (detail.toLowerCase().includes("permission") || detail.toLowerCase().includes("access denied"))
-      return "Cannot read the repository â€” check folder permissions.";
+      return "Cannot read the repository — check folder permissions.";
     if (detail.toLowerCase().includes("not found") || detail.toLowerCase().includes("404"))
       return "Pull request not found. Verify the URL is correct and the repository is accessible.";
     if (detail.toLowerCase().includes("rate limit"))
-      return "GitPullRequest API rate limit exceeded. Set GITHUB_TOKEN on the server or wait before retrying.";
+      return "GitHub API rate limit exceeded. Set GITHUB_TOKEN on the server or wait before retrying.";
     if (detail.toLowerCase().includes("authentication") || detail.toLowerCase().includes("401"))
-      return "GitPullRequest authentication failed. Ask the server administrator to set GITHUB_TOKEN.";
+      return "GitHub authentication failed. Ask the server administrator to set GITHUB_TOKEN.";
     if (detail.toLowerCase().includes("forbidden") || detail.toLowerCase().includes("403"))
-      return "Access denied. The repository may be private â€” set GITHUB_TOKEN with repo scope.";
+      return "Access denied. The repository may be private — set GITHUB_TOKEN with repo scope.";
     if (detail) return detail;
     if (raw.includes("Network Error") || raw.includes("ECONNREFUSED"))
       return "Cannot reach the analysis API. Make sure the backend is running on port 8000.";
@@ -277,11 +338,46 @@ export function AnalyzePR() {
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
-      <div className="mb-8">
+      <div className="mb-6">
         <h1 className="text-2xl font-semibold text-white mb-1">PR Intelligence</h1>
         <p className="text-zinc-500 text-sm">
           Analyse a pull request from a local Git repository or directly from GitHub.
         </p>
+      </div>
+
+      {/* Quick Demo Bar for Hackathon & Live Evaluation */}
+      <div className="mb-6 flex flex-wrap items-center gap-2 p-3 rounded-xl bg-[#18181f]/80 border border-[#2a2a38]">
+        <span className="text-xs font-semibold text-zinc-400 flex items-center gap-1.5 mr-1">
+          <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+          Quick Demos:
+        </span>
+        <button
+          type="button"
+          onClick={() => handleLoadDemo("high-risk-payment")}
+          disabled={loading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 transition-colors disabled:opacity-50"
+        >
+          <AlertTriangle className="w-3 h-3" />
+          High-Risk Payment Demo (60/100)
+        </button>
+        <button
+          type="button"
+          onClick={() => handleLoadDemo("safe-pr")}
+          disabled={loading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 transition-colors disabled:opacity-50"
+        >
+          <CheckCircle2 className="w-3 h-3" />
+          Safe PR Demo (19/100)
+        </button>
+        <button
+          type="button"
+          onClick={() => handleLoadDemo("sample-github-pr")}
+          disabled={loading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 transition-colors disabled:opacity-50"
+        >
+          <GitPullRequest className="w-3 h-3" />
+          Sample GitHub PR
+        </button>
       </div>
 
       <div className="grid lg:grid-cols-5 gap-6">
@@ -309,7 +405,7 @@ export function AnalyzePR() {
               }`}
             >
               <GitPullRequest className="w-3.5 h-3.5" />
-              GitPullRequest PR
+              GitHub PR
             </button>
           </div>
 
@@ -336,7 +432,7 @@ export function AnalyzePR() {
                 <div className="rounded-lg bg-[#18181f] border border-[#2a2a38] px-3 py-2.5 flex items-start gap-2.5">
                   <Lock className="w-3.5 h-3.5 text-zinc-600 flex-shrink-0 mt-0.5" />
                   <p className="text-[11px] text-zinc-600 leading-relaxed">
-                    Your GitPullRequest token is kept on the server. Public repos work without a token.
+                    Your GitHub token is kept on the server. Public repos work without a token.
                     Private repos require{" "}
                     <span className="font-mono text-zinc-500">GITHUB_TOKEN</span> with{" "}
                     <span className="font-mono text-zinc-500">repo</span> scope.
@@ -352,7 +448,7 @@ export function AnalyzePR() {
 
         {/* Result panel */}
         <div className="lg:col-span-3">
-          {!result && !loading && <EmptyAnalysis mode={mode} />}
+          {!result && !loading && <EmptyAnalysis mode={mode} onPickDemo={handleLoadDemo} />}
           {loading && <LoadingAnalysis />}
           {result && (
             <ResultPanel
@@ -398,7 +494,7 @@ function SubmitButton({
       {loading ? (
         <>
           <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-          Analysingâ€¦
+          Analysing…
         </>
       ) : (
         <>
@@ -431,7 +527,7 @@ function GitHubUrlField({
   return (
     <div>
       <div className="flex items-center justify-between mb-1.5">
-        <label htmlFor="gh_url" className="text-xs font-medium text-zinc-400">GitPullRequest PR URL</label>
+        <label htmlFor="gh_url" className="text-xs font-medium text-zinc-400">GitHub PR URL</label>
         <span className="text-[10px] text-zinc-600 uppercase tracking-wide font-medium">required</span>
       </div>
       <div className="relative">
@@ -453,8 +549,8 @@ function GitHubUrlField({
         <div className="mt-1.5 flex items-start gap-1.5">
           <Info className="w-3 h-3 text-zinc-700 flex-shrink-0 mt-0.5" />
           <p className="text-[11px] text-zinc-600 leading-relaxed">
-            Paste the full URL to any public GitPullRequest PR.{" "}
-            <span className="font-mono text-zinc-700">e.g. https://github.com/facebook/react/pull/1</span>
+            Paste the full URL to any public GitHub PR.{" "}
+            <span className="font-mono text-zinc-700">e.g. https://github.com/octocat/Hello-World/pull/1</span>
           </p>
         </div>
       )}
@@ -462,23 +558,37 @@ function GitHubUrlField({
   );
 }
 
-function EmptyAnalysis({ mode }: { mode?: AnalysisMode }) {
+function EmptyAnalysis({ mode, onPickDemo }: { mode?: AnalysisMode; onPickDemo?: (id: string) => void }) {
   return (
     <div className="h-full flex items-center justify-center text-center py-20">
       <div>
         <div className="w-14 h-14 rounded-xl bg-[#18181f] border border-[#2a2a38] flex items-center justify-center mx-auto mb-4">
           {mode === "github" ? <GitPullRequest className="w-7 h-7 text-zinc-600" /> : <FileText className="w-7 h-7 text-zinc-600" />}
         </div>
-        <p className="text-zinc-500 text-sm max-w-xs">
+        <p className="text-zinc-500 text-sm max-w-xs mb-4">
           {mode === "github"
-            ? <>Paste a GitPullRequest PR URL and click <strong className="text-zinc-300">Analyse PR</strong>.</>
+            ? <>Paste a GitHub PR URL and click <strong className="text-zinc-300">Analyse PR</strong>.</>
             : <>Fill in the repository path and refs, then click <strong className="text-zinc-300">Run Analysis</strong>.</>}
         </p>
-        {mode !== "github" && (
-          <div className="mt-6 text-xs text-zinc-700 space-y-1">
-            <p>Quick start with the demo repo:</p>
-            <code className="text-zinc-600 font-mono">examples/demo-repo</code>
-            <p>Base: <code className="text-zinc-600 font-mono">main</code> Â· Head: <code className="text-zinc-600 font-mono">HEAD</code></p>
+        {onPickDemo && (
+          <div className="flex flex-col items-center gap-2 mt-4">
+            <span className="text-xs text-zinc-600">Or test right now with a pre-configured scenario:</span>
+            <div className="flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => onPickDemo("high-risk-payment")}
+                className="text-xs px-2.5 py-1 rounded bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors"
+              >
+                ⚡ High-Risk Demo
+              </button>
+              <button
+                type="button"
+                onClick={() => onPickDemo("safe-pr")}
+                className="text-xs px-2.5 py-1 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 transition-colors"
+              >
+                🛡️ Safe PR Demo
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -491,7 +601,7 @@ function LoadingAnalysis() {
     <Card className="p-8">
       <div className="flex flex-col items-center text-center py-8">
         <div className="w-12 h-12 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-4" />
-        <p className="text-sm text-zinc-300 font-medium mb-1">Analysing repositoryâ€¦</p>
+        <p className="text-sm text-zinc-300 font-medium mb-1">Analysing repository…</p>
         <p className="text-xs text-zinc-600">Reading Git history, scoring signals, detecting patterns</p>
       </div>
     </Card>

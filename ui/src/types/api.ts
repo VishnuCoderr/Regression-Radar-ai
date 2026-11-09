@@ -61,6 +61,24 @@ export interface ScoringConfig {
   thresholds: Record<string, number>;
 }
 
+export interface DemoScenario {
+  id: string;
+  title: string;
+  description: string;
+  category: "high" | "low" | "github";
+  expected_score?: number | null;
+  pr_url?: string | null;
+  repo_path?: string | null;
+  base_ref?: string | null;
+  head_ref?: string | null;
+  author?: string | null;
+}
+
+export interface DemoRunRequest {
+  scenario_id: string;
+  use_ai?: boolean;
+}
+
 // App-internal types
 export interface AnalysisRecord {
   id: string;

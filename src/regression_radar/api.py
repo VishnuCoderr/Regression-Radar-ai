@@ -137,6 +137,24 @@ class GitHubPRRequest(BaseModel):
     bypass_cache: bool = Field(default=False, description="Bypass in-memory cache")
 
 
+class DemoScenario(BaseModel):
+    id: str
+    title: str
+    description: str
+    category: str
+    expected_score: float | None = None
+    pr_url: str | None = None
+    repo_path: str | None = None
+    base_ref: str | None = None
+    head_ref: str | None = None
+    author: str | None = None
+
+
+class DemoRunRequest(BaseModel):
+    scenario_id: str
+    use_ai: bool = False
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str
@@ -465,6 +483,119 @@ def cache_clear_endpoint() -> dict:
     """Clear all in-memory caches."""
     clear_all_caches()
     return {"status": "cleared"}
+
+
+# ---------------------------------------------------------------------------
+# Demo Scenarios API (for 1-click evaluation & interactive testing)
+# ---------------------------------------------------------------------------
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+@app.get("/api/v1/demo/scenarios", response_model=list[DemoScenario])
+def list_demo_scenarios() -> list[DemoScenario]:
+    """Return available pre-configured demo scenarios for one-click evaluation."""
+    high_risk_path = _PROJECT_ROOT / "examples" / "high-risk-demo"
+    safe_demo_path = _PROJECT_ROOT / "examples" / "demo-repo"
+
+    return [
+        DemoScenario(
+            id="high-risk-payment",
+            title="High-Risk Payment Regression",
+            description=(
+                "Critical transaction validation change omitting required ledger co-change "
+                "and test updates by an unfamiliar author."
+            ),
+            category="high",
+            expected_score=60.2,
+            repo_path=str(high_risk_path),
+            base_ref="main",
+            head_ref="HEAD",
+            author="new@example.com",
+        ),
+        DemoScenario(
+            id="safe-pr",
+            title="Safe User Model & Test Update",
+            description=(
+                "Additive change adding user model flags with accompanying unit tests "
+                "and non-fragile history."
+            ),
+            category="low",
+            expected_score=18.8,
+            repo_path=str(safe_demo_path),
+            base_ref="main",
+            head_ref="feature/safe-user-update",
+            author="ananya@example.com",
+        ),
+        DemoScenario(
+            id="sample-github-pr",
+            title="Sample GitHub Pull Request",
+            description="Public pull request analyzed via GitHub REST API without local checkout.",
+            category="github",
+            expected_score=None,
+            pr_url="https://github.com/octocat/Hello-World/pull/1",
+        ),
+    ]
+
+
+@app.post("/api/v1/demo/run", response_model=AnalysisResult)
+def run_demo_scenario(req: DemoRunRequest) -> AnalysisResult:
+    """Execute a pre-configured demo scenario and return full analysis results."""
+    scenario_id = req.scenario_id.lower().strip()
+    high_risk_path = _PROJECT_ROOT / "examples" / "high-risk-demo"
+    demo_repo_path = _PROJECT_ROOT / "examples" / "demo-repo"
+
+    if scenario_id == "high-risk-payment":
+        if not (high_risk_path / ".git").is_dir():
+            import sys
+
+            examples_dir = str(_PROJECT_ROOT / "examples")
+            if examples_dir not in sys.path:
+                sys.path.insert(0, examples_dir)
+            from build_high_risk_demo import create_high_risk_demo
+
+            create_high_risk_demo(high_risk_path)
+
+        return _run_analysis(
+            AnalyzeRequest(
+                repo_path=str(high_risk_path),
+                base_ref="main",
+                head_ref="HEAD",
+                pr_author_email="new@example.com",
+                use_ai=req.use_ai,
+            )
+        )
+
+    if scenario_id == "safe-pr":
+        if not (demo_repo_path / ".git").is_dir():
+            import sys
+
+            examples_dir = str(_PROJECT_ROOT / "examples")
+            if examples_dir not in sys.path:
+                sys.path.insert(0, examples_dir)
+            from build_demo_repo import create_demo_repository
+
+            create_demo_repository(demo_repo_path)
+
+        return _run_analysis(
+            AnalyzeRequest(
+                repo_path=str(demo_repo_path),
+                base_ref="main",
+                head_ref="feature/safe-user-update",
+                pr_author_email="ananya@example.com",
+                use_ai=req.use_ai,
+            )
+        )
+
+    if scenario_id == "sample-github-pr":
+        return analyze_github_pr_endpoint(
+            GitHubPRRequest(
+                pr_url="https://github.com/octocat/Hello-World/pull/1",
+                use_ai=req.use_ai,
+            )
+        )
+
+    raise HTTPException(status_code=404, detail=f"Unknown demo scenario '{req.scenario_id}'")
 
 
 # ---------------------------------------------------------------------------

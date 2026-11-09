@@ -137,7 +137,18 @@ def create_demo_repository(target_dir: Path) -> None:
             author_email="dev@example.com",
         )
 
-    # 4. Now create feature branch 'feature/payment-v2' (the proposed PR)
+    # 4. Create safe branch 'feature/safe-user-update' (low risk scenario)
+    git("checkout", "-b", "feature/safe-user-update")
+    write_file("src/users.ts", "export const user = { active: true, role: 'member' };\n")
+    write_file("tests/users.test.ts", "test('user role', () => true);\n")
+    commit(
+        "feat: add active flag and test for user profile",
+        author_name="Ananya Sharma",
+        author_email="ananya@example.com",
+    )
+
+    # 5. Now create feature branch 'feature/payment-v2' (the proposed PR)
+    git("checkout", "main")
     git("checkout", "-b", "feature/payment-v2")
 
     # In this PR, a new developer modifies payments.ts, but forgets refunds.ts and tests!
@@ -153,7 +164,7 @@ def create_demo_repository(target_dir: Path) -> None:
     )
 
     print(f"Demo repository created successfully at {target_dir}")
-    print("Branch 'feature/payment-v2' is checked out and ready for analysis against 'main'.")
+    print("Branches 'feature/payment-v2' and 'feature/safe-user-update' are ready.")
 
 
 if __name__ == "__main__":

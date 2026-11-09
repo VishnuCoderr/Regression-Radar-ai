@@ -3,6 +3,8 @@ import axios from "axios";
 import type {
   AnalysisResult,
   AnalyzeRequest,
+  DemoRunRequest,
+  DemoScenario,
   GitHubPRRequest,
   HealthResponse,
   ScoringConfig,
@@ -44,5 +46,15 @@ export async function runGitHubAnalysis(req: GitHubPRRequest): Promise<AnalysisR
 
 export async function getTokenStatus(): Promise<TokenStatus> {
   const { data } = await http.get<TokenStatus>("/api/v1/github/token-status");
+  return data;
+}
+
+export async function getDemoScenarios(): Promise<DemoScenario[]> {
+  const { data } = await http.get<DemoScenario[]>("/api/v1/demo/scenarios");
+  return data;
+}
+
+export async function runDemoScenario(req: DemoRunRequest): Promise<AnalysisResult> {
+  const { data } = await http.post<AnalysisResult>("/api/v1/demo/run", req);
   return data;
 }
