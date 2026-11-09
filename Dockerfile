@@ -64,4 +64,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:${PORT:-10000}/health/ready || exit 1
 
 # Default entrypoint dynamically uses Render's assigned $PORT (defaults to 10000)
-CMD ["sh", "-c", "uvicorn regression_radar.api:app --host 0.0.0.0 --port ${PORT:-10000} --workers 2"]
+CMD ["sh", "-c", "uvicorn regression_radar.api:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1"]
