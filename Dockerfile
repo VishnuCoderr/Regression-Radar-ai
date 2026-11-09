@@ -38,29 +38,30 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir ".[api]" && \
     pip install --no-cache-dir -e .
 
-# Copy backend source code
+# Copy backend source code and demo scenario generators
 COPY src/ src/
+COPY examples/ examples/
 
 # Copy compiled React frontend assets from Stage 1
 COPY --from=frontend-builder /build/ui/dist /app/ui/dist
 
-# Set up storage directory with proper permissions
-RUN mkdir -p /app/data && chown -R appuser:appuser /app
+# Set up storage and examples directories with non-root user permissions
+RUN mkdir -p /app/data /app/examples && chown -R appuser:appuser /app
 
 # Switch to non-root user
 USER appuser
 
-ENV PORT=8000 \
+ENV PORT=10000 \
     RR_HOST=0.0.0.0 \
     LOG_LEVEL=INFO \
     SERVE_STATIC_UI=true \
     STORAGE_PATH=/app/data
 
-EXPOSE 8000
+EXPOSE 10000
 
 # Container healthcheck using the readiness endpoint
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health/ready || exit 1
+    CMD curl -f http://localhost:${PORT:-10000}/health/ready || exit 1
 
-# Default entrypoint starts uvicorn ASGI production server
-CMD ["uvicorn", "regression_radar.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# Default entrypoint dynamically uses Render's assigned $PORT (defaults to 10000)
+CMD ["sh", "-c", "uvicorn regression_radar.api:app --host 0.0.0.0 --port ${PORT:-10000} --workers 2"]

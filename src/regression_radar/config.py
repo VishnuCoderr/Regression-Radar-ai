@@ -27,7 +27,7 @@ class Settings:
     # Server settings
     host: str = field(default_factory=lambda: os.environ.get("RR_HOST", "0.0.0.0"))
     port: int = field(
-        default_factory=lambda: int(os.environ.get("PORT", os.environ.get("RR_PORT", "8000")))
+        default_factory=lambda: int(os.environ.get("PORT", os.environ.get("RR_PORT", "10000")))
     )
 
     # Security & CORS
