@@ -8,6 +8,7 @@ and retrieving structured analysis results.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -467,7 +468,6 @@ def github_token_status() -> dict:
     Report whether a GitHub token is configured on the server.
     Returns the token presence only — never the token value itself.
     """
-    import os
     has_token = bool(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
     return {"has_token": has_token}
 
@@ -486,10 +486,110 @@ def cache_clear_endpoint() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Demo Scenarios API (for 1-click evaluation & interactive testing)
+# Path resolution helpers (for containerized and local execution)
 # ---------------------------------------------------------------------------
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+def resolve_project_root() -> Path:
+    """
+    Locate project root directory containing configs, examples, and ui.
+
+    Checks in priority order:
+    1. settings.project_root or RR_PROJECT_ROOT environment variable.
+    2. Path relative to source file (__file__ -> src/regression_radar/api.py -> root).
+    3. Current working directory (standard in Docker container where WORKDIR=/app).
+    4. /app fallback for container environments.
+    """
+    if settings.project_root and settings.project_root.is_dir():
+        return settings.project_root.resolve()
+
+    env_root = os.environ.get("RR_PROJECT_ROOT")
+    if env_root:
+        p = Path(env_root).resolve()
+        if p.is_dir():
+            return p
+
+    # 1. Source layout: src/regression_radar/api.py -> root
+    source_root = Path(__file__).resolve().parent.parent.parent
+    if (
+        (source_root / "configs").is_dir()
+        or (source_root / "examples").is_dir()
+        or (source_root / "ui").is_dir()
+    ):
+        return source_root
+
+    # 2. Current working directory (e.g. /app in Docker)
+    cwd = Path.cwd().resolve()
+    if (cwd / "examples").is_dir() or (cwd / "ui").is_dir() or (cwd / "configs").is_dir():
+        return cwd
+
+    # 3. Standard container directory
+    container_app = Path("/app")
+    if container_app.is_dir() and (container_app / "examples").is_dir():
+        return container_app
+
+    return source_root
+
+
+def resolve_ui_dist() -> Path | None:
+    """
+    Locate the directory containing compiled React frontend assets (index.html).
+
+    Checks in priority order:
+    1. settings.ui_dist_path or UI_DIST_PATH / RR_UI_DIST environment variables.
+    2. /app/ui/dist (standard Docker container path).
+    3. Path.cwd() / "ui" / "dist" (working directory in container or local root).
+    4. _PROJECT_ROOT / "ui" / "dist" (resolved project root).
+    5. Relative to this module file (when running from local source tree).
+    """
+    # 1. Explicit configuration or environment override
+    if settings.ui_dist_path:
+        p = settings.ui_dist_path.resolve()
+        if (p / "index.html").is_file():
+            return p
+
+    env_path = os.environ.get("UI_DIST_PATH") or os.environ.get("RR_UI_DIST")
+    if env_path:
+        p = Path(env_path).resolve()
+        if (p / "index.html").is_file():
+            return p
+
+    # 2. Check /app/ui/dist (Docker runtime)
+    container_dist = Path("/app/ui/dist")
+    if (container_dist / "index.html").is_file():
+        return container_dist
+
+    # 3. Check cwd / ui / dist
+    cwd_dist = (Path.cwd() / "ui" / "dist").resolve()
+    if (cwd_dist / "index.html").is_file():
+        return cwd_dist
+
+    # 4. Check project root / ui / dist
+    root = resolve_project_root()
+    root_dist = (root / "ui" / "dist").resolve()
+    if (root_dist / "index.html").is_file():
+        return root_dist
+
+    # 5. Check relative to source module
+    module_dist = (Path(__file__).resolve().parent.parent.parent / "ui" / "dist").resolve()
+    if (module_dist / "index.html").is_file():
+        return module_dist
+
+    # Fallback to any directory that exists even if index.html is missing
+    for candidate in [cwd_dist, root_dist, container_dist, module_dist]:
+        if candidate.is_dir():
+            return candidate
+
+    return None
+
+
+_PROJECT_ROOT = resolve_project_root()
+_ui_dist = resolve_ui_dist()
+
+
+# ---------------------------------------------------------------------------
+# Demo Scenarios API (for 1-click evaluation & interactive testing)
+# ---------------------------------------------------------------------------
 
 
 @app.get("/api/v1/demo/scenarios", response_model=list[DemoScenario])
@@ -602,23 +702,52 @@ def run_demo_scenario(req: DemoRunRequest) -> AnalysisResult:
 # Production Static UI Serving (SPA fallback)
 # ---------------------------------------------------------------------------
 
-_ui_dist = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
-if settings.serve_static_ui and _ui_dist.is_dir():
+
+def serve_root() -> Response:
+    """Serve index.html at root path."""
+    if not _ui_dist:
+        raise HTTPException(status_code=404, detail="SPA distribution directory not found")
+    index_file = _ui_dist / "index.html"
+    if index_file.is_file():
+        return FileResponse(index_file)
+    raise HTTPException(status_code=404, detail="SPA index file not found")
+
+
+def serve_spa(full_path: str) -> Response:
+    """Serve compiled React SPA assets with index.html fallback for client-side routing."""
+    if not _ui_dist:
+        raise HTTPException(status_code=404, detail="SPA distribution directory not found")
+
+    clean_path = full_path.strip("/")
+    # Prevent static handler from hijacking API or health routes
+    if (
+        clean_path == "api"
+        or clean_path.startswith("api/")
+        or clean_path == "health"
+        or clean_path.startswith("health/")
+    ):
+        raise HTTPException(status_code=404, detail="API route not found")
+
+    # Check for direct static file match (e.g. favicon.svg, icons.svg, robots.txt)
+    if full_path:
+        try:
+            requested = (_ui_dist / full_path).resolve()
+            if requested.is_file() and _ui_dist.resolve() in requested.parents:
+                return FileResponse(requested)
+        except Exception:
+            pass
+
+    # SPA client-side route fallback
+    index_file = _ui_dist / "index.html"
+    if index_file.is_file():
+        return FileResponse(index_file)
+    raise HTTPException(status_code=404, detail="SPA index file not found")
+
+
+if settings.serve_static_ui and _ui_dist and _ui_dist.is_dir():
     _assets_dir = _ui_dist / "assets"
     if _assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
 
-    @app.get("/{full_path:path}", include_in_schema=False)
-    async def serve_spa(full_path: str) -> Response:
-        """Serve compiled React SPA assets with index.html fallback for client-side routing."""
-        # Prevent static handler from hijacking API or health routes
-        if full_path.startswith("api/") or full_path.startswith("health"):
-            raise HTTPException(status_code=404, detail="API route not found")
-
-        requested = _ui_dist / full_path
-        if full_path and requested.is_file():
-            return FileResponse(requested)
-        index_file = _ui_dist / "index.html"
-        if index_file.is_file():
-            return FileResponse(index_file)
-        raise HTTPException(status_code=404, detail="SPA index file not found")
+    app.add_api_route("/", serve_root, methods=["GET"], include_in_schema=False)
+    app.add_api_route("/{full_path:path}", serve_spa, methods=["GET"], include_in_schema=False)

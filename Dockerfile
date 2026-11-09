@@ -52,7 +52,9 @@ ENV PORT=10000 \
     RR_HOST=0.0.0.0 \
     LOG_LEVEL=INFO \
     SERVE_STATIC_UI=true \
-    STORAGE_PATH=/app/data
+    STORAGE_PATH=/app/data \
+    RR_PROJECT_ROOT=/app \
+    UI_DIST_PATH=/app/ui/dist
 
 EXPOSE 10000
 

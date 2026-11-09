@@ -70,6 +70,20 @@ class Settings:
         default_factory=lambda: os.environ.get("SERVE_STATIC_UI", "true").lower()
         in ("1", "true", "yes")
     )
+    project_root: Path | None = field(
+        default_factory=lambda: (
+            Path(os.environ["RR_PROJECT_ROOT"])
+            if "RR_PROJECT_ROOT" in os.environ
+            else None
+        )
+    )
+    ui_dist_path: Path | None = field(
+        default_factory=lambda: (
+            Path(os.environ.get("UI_DIST_PATH", os.environ.get("RR_UI_DIST", "")))
+            if os.environ.get("UI_DIST_PATH") or os.environ.get("RR_UI_DIST")
+            else None
+        )
+    )
 
     # Scoring configuration path override
     weights_config: Path | None = field(
