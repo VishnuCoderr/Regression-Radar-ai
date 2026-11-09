@@ -27,6 +27,7 @@ from regression_radar.ci import (
     post_or_update_pr_comment,
 )
 from regression_radar.cochange import calculate_cochange_signal
+from regression_radar.config import settings
 from regression_radar.diff_parser import parse_diff
 from regression_radar.git_history import (
     DataQuality,
@@ -380,6 +381,83 @@ def analyse_cmd(
             console.print(f"\n[bold yellow]CI Gate Warning (Non-blocking):[/bold yellow] {reason}")
 
 
+@app.command("analyze")
+def analyze_cmd(
+    repo: Path = typer.Argument(
+        ...,
+        help="Path to a local Git repository.",
+        exists=True,
+        file_okay=False,
+        resolve_path=True,
+    ),
+    base: str | None = typer.Option(None, "--base", "-b", help="Base branch or ref (e.g. main)."),
+    head: str | None = typer.Option(
+        None, "--head", "-h", help="Head commit or ref (defaults to HEAD)."
+    ),
+    format: str = typer.Option(
+        "terminal",
+        "--format",
+        "-f",
+        help="Output format: terminal, markdown, json.",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write report output to a file instead of stdout.",
+    ),
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Custom path to weights configuration TOML file.",
+    ),
+    author: str | None = typer.Option(
+        None,
+        "--author",
+        help="Email of the PR author (used to calculate ownership familiarity).",
+    ),
+    max_commits: int = typer.Option(2000, "--max-commits"),
+    ai: bool = typer.Option(
+        True,
+        "--ai/--no-ai",
+        help="Enable AI summary enrichment if GEMINI_API_KEY is configured.",
+    ),
+    cache: bool = typer.Option(
+        True,
+        "--cache/--no-cache",
+        help="Enable in-memory caching for Git history and diffs.",
+    ),
+    max_risk: float | None = typer.Option(
+        None, "--max-risk", help="Fail CI gate if risk meets/exceeds this score."
+    ),
+    require_tests: bool = typer.Option(
+        False, "--require-tests", help="Fail CI gate if modified source files lack tests."
+    ),
+    blocking: bool = typer.Option(
+        False, "--blocking/--non-blocking", help="Block execution (exit 1) if gate fails."
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Analyse a pull request or ref comparison (US English alias for 'analyse')."""
+    analyse_cmd(
+        repo=repo,
+        base=base,
+        head=head,
+        format=format,
+        output=output,
+        config=config,
+        author=author,
+        max_commits=max_commits,
+        ai=ai,
+        cache=cache,
+        max_risk=max_risk,
+        require_tests=require_tests,
+        blocking=blocking,
+        verbose=verbose,
+    )
+
+
 @app.command("ci")
 def ci_cmd(
     repo: Path = typer.Option(
@@ -547,6 +625,57 @@ def ci_cmd(
         raise typer.Exit(1)
     else:
         console.print(f"[bold yellow]! GATE WARNING (Non-blocking)[/bold yellow]: {gate_msg}")
+
+
+@app.command("serve")
+def serve_cmd(
+    host: str | None = typer.Option(
+        None,
+        "--host",
+        "-h",
+        help="Host interface to bind the server to (defaults to RR_HOST or 0.0.0.0).",
+    ),
+    port: int | None = typer.Option(
+        None,
+        "--port",
+        "-p",
+        help="Port number to bind the server to (defaults to PORT/RR_PORT or 8000).",
+    ),
+    reload: bool = typer.Option(
+        False,
+        "--reload",
+        help="Enable auto-reload on code changes (recommended for development).",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose debug logging."),
+) -> None:
+    """Launch the Regression Radar FastAPI backend and web application."""
+    _setup_logging(verbose)
+    effective_host = host or settings.host
+    effective_port = port if port is not None else settings.port
+
+    console.print(
+        f"[bold blue]Starting Regression Radar v{__version__}[/bold blue] on "
+        f"[green]http://{effective_host}:{effective_port}[/green]"
+    )
+    if reload:
+        console.print("[dim yellow]Auto-reload enabled[/dim yellow]")
+
+    try:
+        import uvicorn
+    except ImportError:
+        err_console.print(
+            "[bold red]Error:[/bold red] uvicorn is not installed. "
+            "Install with 'pip install regression-radar[api]'."
+        )
+        raise typer.Exit(1)
+
+    uvicorn.run(
+        "regression_radar.api:app",
+        host=effective_host,
+        port=effective_port,
+        reload=reload,
+        log_level="debug" if verbose else settings.log_level.lower(),
+    )
 
 
 def _quality_badge(quality: DataQuality) -> None:
