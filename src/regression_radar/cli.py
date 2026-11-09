@@ -18,12 +18,11 @@ from rich.console import Console
 from rich.table import Table
 
 from regression_radar import __version__
+from regression_radar.cache import cached_get_commits, cached_get_diff
 from regression_radar.cochange import calculate_cochange_signal
 from regression_radar.diff_parser import parse_diff
 from regression_radar.git_history import (
     DataQuality,
-    get_commits,
-    get_diff,
     get_repo_stats,
 )
 from regression_radar.hotspot import calculate_hotspot_signal
@@ -130,7 +129,7 @@ def inspect_cmd(
     console.print(f"\n[bold]Diff base:[/bold] {effective_base} -> HEAD\n")
 
     try:
-        raw_diff = get_diff(repo, base_ref=effective_base, head_ref="HEAD")
+        raw_diff = cached_get_diff(repo, base_ref=effective_base, head_ref="HEAD")
     except RuntimeError as exc:
         err_console.print(f"[red]Diff error:[/red] {exc}")
         raise typer.Exit(1)
@@ -165,7 +164,7 @@ def inspect_cmd(
         )
 
     console.print()
-    commits = get_commits(
+    commits = cached_get_commits(
         repo,
         max_commits=max_commits,
         base_ref=effective_base,
@@ -224,6 +223,11 @@ def analyse_cmd(
         "--ai/--no-ai",
         help="Enable AI summary enrichment if GEMINI_API_KEY is configured.",
     ),
+    cache: bool = typer.Option(
+        True,
+        "--cache/--no-cache",
+        help="Enable in-memory caching for Git history and diffs.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Analyse a pull request or ref comparison and produce an explainable risk report."""
@@ -244,7 +248,12 @@ def analyse_cmd(
 
     # 1. Extract diff
     try:
-        raw_diff = get_diff(repo, base_ref=effective_base, head_ref=effective_head)
+        raw_diff = cached_get_diff(
+            repo,
+            base_ref=effective_base,
+            head_ref=effective_head,
+            bypass_cache=not cache,
+        )
     except RuntimeError as exc:
         err_console.print(f"[red]Diff error:[/red] {exc}")
         raise typer.Exit(1)
@@ -255,7 +264,12 @@ def analyse_cmd(
     deleted_files = [f.path for f in parsed_diff.files if f.change_type.value == "deleted"]
 
     # 2. Extract commit history (prior to PR or on base branch)
-    history_commits = get_commits(repo, max_commits=max_commits, exclude_merges=True)
+    history_commits = cached_get_commits(
+        repo,
+        max_commits=max_commits,
+        exclude_merges=True,
+        bypass_cache=not cache,
+    )
 
     # 3. Execute all 4 analysis signals
     hotspot_signal = calculate_hotspot_signal(

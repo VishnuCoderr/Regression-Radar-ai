@@ -14,19 +14,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from regression_radar import __version__
+from regression_radar.cache import (
+    cached_fetch_github_pr_data,
+    cached_get_commits,
+    cached_get_diff,
+    clear_all_caches,
+    get_all_cache_stats,
+)
 from regression_radar.cochange import calculate_cochange_signal
 from regression_radar.diff_parser import parse_diff
 from regression_radar.git_history import (
     CommitInfo,
     DataQuality,
-    get_commits,
-    get_diff,
     get_repo_stats,
     validate_repo,
 )
 from regression_radar.github_service import (
     GitHubAPIError,
-    fetch_github_pr_data,
+    GitHubAnalysisData,
     parse_pr_url,
 )
 from regression_radar.hotspot import calculate_hotspot_signal
@@ -68,11 +73,13 @@ class AnalyzeRequest(BaseModel):
     head_ref: str = Field(default="HEAD", description="PR head branch or ref")
     pr_author_email: str | None = Field(default=None, description="PR author email")
     use_ai: bool = Field(default=False, description="Enrich recommendations with AI")
+    bypass_cache: bool = Field(default=False, description="Bypass in-memory cache")
 
 
 class GitHubPRRequest(BaseModel):
     pr_url: str = Field(description="Full GitHub PR URL, e.g. https://github.com/owner/repo/pull/123")
     use_ai: bool = Field(default=False, description="Enrich recommendations with AI")
+    bypass_cache: bool = Field(default=False, description="Bypass in-memory cache")
 
 
 class HealthResponse(BaseModel):
@@ -197,13 +204,23 @@ def _run_analysis(req: AnalyzeRequest) -> AnalysisResult:
         )
 
     try:
-        raw_diff = get_diff(validated_path, base_ref=req.base_ref, head_ref=req.head_ref)
+        raw_diff = cached_get_diff(
+            validated_path,
+            base_ref=req.base_ref,
+            head_ref=req.head_ref,
+            bypass_cache=req.bypass_cache,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=f"Git diff failed: {exc}") from exc
 
     parsed_diff = parse_diff(raw_diff.text)
     changed_files = parsed_diff.changed_paths
-    history_commits = get_commits(validated_path, max_commits=2000, exclude_merges=True)
+    history_commits = cached_get_commits(
+        validated_path,
+        max_commits=2000,
+        exclude_merges=True,
+        bypass_cache=req.bypass_cache,
+    )
     renames = {f.path: f.old_path for f in parsed_diff.files if f.old_path and f.old_path != f.path}
     deleted_files = [f.path for f in parsed_diff.files if f.change_type.value == "deleted"]
 
@@ -245,6 +262,17 @@ def analyze_markdown_endpoint(req: AnalyzeRequest) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+def fetch_github_pr_data(
+    owner: str,
+    repo: str,
+    number: int,
+    *,
+    bypass_cache: bool = False,
+) -> GitHubAnalysisData:
+    """Fetch GitHub PR data with in-memory caching."""
+    return cached_fetch_github_pr_data(owner, repo, number, bypass_cache=bypass_cache)
+
+
 @app.post("/api/v1/analyze/github-pr", response_model=AnalysisResult)
 def analyze_github_pr_endpoint(req: GitHubPRRequest) -> AnalysisResult:
     """
@@ -262,9 +290,11 @@ def analyze_github_pr_endpoint(req: GitHubPRRequest) -> AnalysisResult:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # Fetch all data from GitHub
+    # Fetch all data from GitHub (uses cached PR data if head_sha unchanged)
     try:
-        gh_data = fetch_github_pr_data(owner, repo, number)
+        gh_data = fetch_github_pr_data(
+            owner, repo, number, bypass_cache=req.bypass_cache
+        )
     except GitHubAPIError as exc:
         status = exc.status_code or 502
         # Map GitHub 404 → our 404; auth errors → 401/403; others → 502
@@ -306,3 +336,16 @@ def github_token_status() -> dict:
     import os
     has_token = bool(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
     return {"has_token": has_token}
+
+
+@app.get("/api/v1/cache/stats")
+def cache_stats_endpoint() -> dict:
+    """Return diagnostic hit/miss/eviction statistics for all in-memory caches."""
+    return get_all_cache_stats()
+
+
+@app.post("/api/v1/cache/clear")
+def cache_clear_endpoint() -> dict:
+    """Clear all in-memory caches."""
+    clear_all_caches()
+    return {"status": "cleared"}
